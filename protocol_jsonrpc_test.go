@@ -6,23 +6,6 @@ import (
 	"testing"
 )
 
-// Minimal helper types for generic JSON-RPC roundtrip tests.
-type PromptParams struct {
-	UserInput UserInput `json:"user_input"`
-}
-
-type UserInput struct {
-	Text string `json:"text"`
-}
-
-type PromptResult struct {
-	Status PromptStatus `json:"status"`
-}
-
-type PromptStatus string
-
-const PromptStatusFinished PromptStatus = "finished"
-
 func TestRawWireMessageRoundtrip(t *testing.T) {
 	original := RawWireMessage{
 		JSONRPC: "2.0",
