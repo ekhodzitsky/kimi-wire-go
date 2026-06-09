@@ -23,6 +23,7 @@ type Client struct {
 	defaultTimeout time.Duration
 	maxIORetries   uint32
 	readerDone     chan struct{}
+	dispatchCh     chan *RawWireMessage
 }
 
 // NewClient creates a new client backed by the given transport.
@@ -31,6 +32,7 @@ func NewClient(transport Transport) *Client {
 		transport:  transport,
 		pending:    make(map[string]chan *RawWireMessage),
 		readerDone: make(chan struct{}),
+		dispatchCh: make(chan *RawWireMessage, 1024),
 	}
 	go c.readerLoop()
 	return c
@@ -51,6 +53,17 @@ func (c *Client) readerLoop() {
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			continue
 		}
+
+		// Events and requests go to the dispatch channel.
+		if raw.Method == "event" || raw.Method == "request" {
+			select {
+			case c.dispatchCh <- &raw:
+			default:
+				// Drop if dispatch buffer is full.
+			}
+			continue
+		}
+
 		c.mu.Lock()
 		ch, ok := c.pending[raw.ID]
 		c.mu.Unlock()
@@ -253,7 +266,10 @@ func (c *Client) Cancel(ctx context.Context) error {
 
 // Shutdown gracefully shuts down the client.
 func (c *Client) Shutdown(ctx context.Context) error {
-	return c.transport.Close()
+	err := c.transport.Close()
+	<-c.readerDone
+	close(c.dispatchCh)
+	return err
 }
 
 // WithDefaultTimeout sets a default timeout for readResponse calls.
