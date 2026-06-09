@@ -23,4 +23,7 @@ func TestRawWireMessage_Roundtrip(t *testing.T) {
 	if parsed.JSONRPC != "2.0" || parsed.ID != "req-1" || parsed.Method != "prompt" {
 		t.Fatalf("roundtrip mismatch: %+v", parsed)
 	}
+	if string(parsed.Params) != string(original.Params) {
+		t.Fatalf("params roundtrip mismatch: got %s, want %s", parsed.Params, original.Params)
+	}
 }
