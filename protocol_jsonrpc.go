@@ -41,5 +41,5 @@ type JSONRPCError struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-// METHOD_NOT_FOUND is the JSON-RPC error code for "Method not found".
-const METHOD_NOT_FOUND int = -32601
+// MethodNotFound is the JSON-RPC error code for "Method not found".
+const MethodNotFound int = -32601
