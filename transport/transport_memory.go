@@ -1,7 +1,8 @@
-package wire
+package transport
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 )
@@ -27,20 +28,20 @@ func (t *InMemoryTransport) ReadLine(ctx context.Context) (string, error) {
 		}
 		return line, nil
 	case <-ctx.Done():
-		return "", &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
+		return "", ctx.Err()
 	}
 }
 
 func (t *InMemoryTransport) WriteLine(ctx context.Context, line string) error {
 	select {
 	case <-ctx.Done():
-		return &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
+		return ctx.Err()
 	default:
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
+		return fmt.Errorf("transport closed")
 	}
 	t.outgoing = append(t.outgoing, line)
 	return nil
@@ -61,13 +62,13 @@ func (t *InMemoryTransport) Inject(line string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
+		return fmt.Errorf("transport closed")
 	}
 	select {
 	case t.incoming <- line:
 		return nil
 	default:
-		return &WireError{Kind: ErrIO, Message: "incoming buffer full"}
+		return fmt.Errorf("incoming buffer full")
 	}
 }
 

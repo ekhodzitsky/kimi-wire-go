@@ -1,4 +1,4 @@
-package wire
+package transport
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func (t *ChannelTransport) WriteLine(ctx context.Context, line string) (err erro
 	defer func() {
 		if r := recover(); r != nil {
 			if fmt.Sprint(r) == "send on closed channel" {
-				err = &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
+				err = fmt.Errorf("transport closed")
 			} else {
 				panic(r)
 			}
@@ -50,7 +50,7 @@ func (t *ChannelTransport) WriteLine(ctx context.Context, line string) (err erro
 
 	select {
 	case <-t.closeCh:
-		return &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
+		return fmt.Errorf("transport closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	case t.tx <- line:

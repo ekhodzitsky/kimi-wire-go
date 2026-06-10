@@ -1,10 +1,13 @@
 package wire
 
-import "context"
+import "github.com/ekhodzitsky/kimi-wire/transport"
 
-// Transport abstracts reading and writing newline-delimited JSON.
-type Transport interface {
-	ReadLine(ctx context.Context) (string, error)
-	WriteLine(ctx context.Context, line string) error
-	Close() error
-}
+type Transport = transport.Transport
+type ChannelTransport = transport.ChannelTransport
+type InMemoryTransport = transport.InMemoryTransport
+type SpawnOptions = transport.SpawnOptions
+type ChildProcessTransport = transport.ChildProcessTransport
+
+var NewChannelTransportPair = transport.NewChannelTransportPair
+var NewInMemoryTransport = transport.NewInMemoryTransport
+var SpawnChildProcessTransport = transport.SpawnChildProcessTransport

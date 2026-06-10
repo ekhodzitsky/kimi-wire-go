@@ -1,8 +1,10 @@
-package wire
+package transport
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -58,13 +60,13 @@ func SpawnChildProcessTransport(kimiBinary string, opts SpawnOptions) (*ChildPro
 
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			return nil, &WireError{Kind: ErrSpawnFailed, Message: err.Error(), Cause: err}
+			return nil, fmt.Errorf("spawn failed: %w", err)
 		}
 
 		stdoutRd, stdoutWr, err := os.Pipe()
 		if err != nil {
 			_ = stdin.Close()
-			return nil, &WireError{Kind: ErrSpawnFailed, Message: err.Error(), Cause: err}
+			return nil, fmt.Errorf("spawn failed: %w", err)
 		}
 		cmd.Stdout = stdoutWr
 
@@ -73,7 +75,7 @@ func SpawnChildProcessTransport(kimiBinary string, opts SpawnOptions) (*ChildPro
 			_ = stdin.Close()
 			_ = stdoutRd.Close()
 			_ = stdoutWr.Close()
-			return nil, &WireError{Kind: ErrSpawnFailed, Message: err.Error(), Cause: err}
+			return nil, fmt.Errorf("spawn failed: %w", err)
 		}
 
 		if err := cmd.Start(); err != nil {
@@ -85,7 +87,7 @@ func SpawnChildProcessTransport(kimiBinary string, opts SpawnOptions) (*ChildPro
 				time.Sleep(25 * time.Millisecond)
 				continue
 			}
-			return nil, &WireError{Kind: ErrSpawnFailed, Message: err.Error(), Cause: err}
+			return nil, fmt.Errorf("spawn failed: %w", err)
 		}
 
 		// Close our reference to the write side; the child owns it now.
@@ -102,7 +104,7 @@ func SpawnChildProcessTransport(kimiBinary string, opts SpawnOptions) (*ChildPro
 
 		return tr, nil
 	}
-	return nil, &WireError{Kind: ErrSpawnFailed, Message: "all spawn attempts failed"}
+	return nil, fmt.Errorf("all spawn attempts failed")
 }
 
 func (t *ChildProcessTransport) logStderr(stderr io.ReadCloser) {
@@ -151,7 +153,7 @@ func flushRedacted(lines []string) {
 
 func (t *ChildProcessTransport) ReadLine(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", &WireError{Kind: ErrTimeout, Message: err.Error(), Cause: err}
+		return "", fmt.Errorf("timeout: %w", err)
 	}
 
 	t.readMu.Lock()
@@ -165,7 +167,7 @@ func (t *ChildProcessTransport) ReadLine(ctx context.Context) (string, error) {
 	line, err := t.reader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) && ctx.Err() != nil {
-			return "", &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
+			return "", fmt.Errorf("timeout: %w", ctx.Err())
 		}
 		if errors.Is(err, io.EOF) {
 			if line != "" {
@@ -173,7 +175,7 @@ func (t *ChildProcessTransport) ReadLine(ctx context.Context) (string, error) {
 			}
 			return "", io.EOF
 		}
-		return "", &WireError{Kind: ErrIO, Message: err.Error(), Cause: err}
+		return "", fmt.Errorf("io error: %w", err)
 	}
 	return strings.TrimSuffix(line, "\n"), nil
 }
@@ -184,17 +186,17 @@ type writeDeadliner interface {
 
 func (t *ChildProcessTransport) WriteLine(ctx context.Context, line string) error {
 	if err := ctx.Err(); err != nil {
-		return &WireError{Kind: ErrTimeout, Message: err.Error(), Cause: err}
+		return fmt.Errorf("timeout: %w", err)
 	}
 
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		return &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
+		return fmt.Errorf("transport closed")
 	}
 	if t.stdin == nil {
 		t.mu.Unlock()
-		return &WireError{Kind: ErrIO, Message: "stdin not available"}
+		return fmt.Errorf("stdin not available")
 	}
 	stdin := t.stdin
 	t.mu.Unlock()
@@ -209,9 +211,9 @@ func (t *ChildProcessTransport) WriteLine(ctx context.Context, line string) erro
 	_, err := fmt.Fprintln(stdin, line)
 	if err != nil {
 		if ctx.Err() != nil {
-			return &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
+			return fmt.Errorf("timeout: %w", ctx.Err())
 		}
-		return &WireError{Kind: ErrIO, Message: err.Error(), Cause: err}
+		return fmt.Errorf("io error: %w", err)
 	}
 	return nil
 }
@@ -244,4 +246,86 @@ func (t *ChildProcessTransport) Close() error {
 		}
 	})
 	return closeErr
+}
+
+// redactString scrubs secrets from a string.
+func redactString(s string) string {
+	result := s
+	for i, re := range secretPatterns {
+		result = re.ReplaceAllString(result, secretReplacements[i])
+	}
+	return result
+}
+
+var (
+	secretKeyPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(api[_-]?key|token|secret|password|auth|access[_-]?key|private[_-]?key|session[_-]?token|bearer|authorization)(?:$|[^a-z0-9])`)
+
+	secretPatterns = []*regexp.Regexp{
+		// key = value / key: value / "key": "value" style assignments.
+		regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret|password|auth|access[_-]?key|private[_-]?key|session[_-]?token|bearer|authorization)\s*[:=]\s*)["']?[^"'\s]{8,}["']?`),
+		// Authorization: Bearer/Basic/Token/API-Key <value>
+		regexp.MustCompile(`(?i)(authorization\s*[:=]\s*(?:bearer|basic|token|api-key)\s+)[^\s]+`),
+		// AWS Access Key ID.
+		regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
+		// GitHub personal access tokens.
+		regexp.MustCompile(`\b(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)[a-zA-Z0-9_\-]+\b`),
+		// JWT (three base64url segments, including padding).
+		regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+=*`),
+		// URL with embedded credentials.
+		regexp.MustCompile(`(?i)(\bhttps?://[^:]+:)[^@]+(@[^\s]+)`),
+		// PEM private keys.
+		regexp.MustCompile(`(?s)-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----`),
+		// PGP private key block.
+		regexp.MustCompile(`(?s)-----BEGIN PGP PRIVATE KEY BLOCK-----.*?-----END PGP PRIVATE KEY BLOCK-----`),
+	}
+
+	secretReplacements = []string{
+		"${1}***",
+		"${1}***",
+		"AKIA...REDACTED",
+		"${1}***",
+		"eyJ...REDACTED",
+		"${1}***${2}",
+		"[PEM_PRIVATE_KEY_REDACTED]",
+		"[PGP_PRIVATE_KEY_BLOCK_REDACTED]",
+	}
+)
+
+// RedactSecrets recursively scrubs secrets from a JSON-like value.
+func RedactSecrets(v any) any {
+	switch val := v.(type) {
+	case string:
+		return redactString(val)
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, v2 := range val {
+			if secretKeyPattern.MatchString(k) {
+				out[k] = "***"
+			} else {
+				out[k] = RedactSecrets(v2)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, v2 := range val {
+			out[i] = RedactSecrets(v2)
+		}
+		return out
+	case json.RawMessage:
+		dec := json.NewDecoder(bytes.NewReader(val))
+		dec.UseNumber()
+		var inner any
+		if err := dec.Decode(&inner); err != nil {
+			return json.RawMessage(redactString(string(val)))
+		}
+		redacted := RedactSecrets(inner)
+		out, err := json.Marshal(redacted)
+		if err != nil {
+			return json.RawMessage(redactString(string(val)))
+		}
+		return json.RawMessage(out)
+	default:
+		return v
+	}
 }

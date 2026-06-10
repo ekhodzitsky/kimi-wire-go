@@ -36,4 +36,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WireError` now implements `Unwrap()` for `errors.Is` compatibility.
 - All transport methods consistently return typed `*WireError` with `Cause` chaining.
 
+## [0.2.0] - 2026-06-10
+
+### Added
+
+- Runnable `examples/quickstart/` demonstrating child-process transport, initialization, and prompting.
+- `Makefile` with targets: `build`, `test`, `test-race`, `coverage`, `fmt`, `vet`.
+- Package-level `doc.go` for root godoc.
+- `.github/dependabot.yml` for automated Go module updates.
+- CI cache (`cache: true`) and `go-version-file: go.mod` in setup-go.
+- `golangci-lint` step in CI workflow.
+
+### Changed
+
+- **Restructured into sub-packages while preserving backward compatibility via type aliases:**
+  - `transport/` — `Transport`, `ChannelTransport`, `InMemoryTransport`, `ChildProcessTransport`.
+  - `protocol/` — all protocol types (`Event`, `Request`, `UserInput`, `RawWireMessage`, etc.).
+  - `internal/redact/` — secret redaction internals.
+  - Root aliases (`transport.go`, `protocol.go`, `internal.go`) keep existing `wire.XYZ` imports working without changes.
+- `.gitignore` extended to exclude `.omc/`, `docs/superpowers/`, build directories, and example binaries.
+
+### Removed
+
+- `docs/superpowers/` — generated superpowers artifacts.
+- `.github/repo-meta.yml` — unused metadata file.
+- `coverage.out` from working directory.
+
+[0.2.0]: https://github.com/ekhodzitsky/kimi-wire/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ekhodzitsky/kimi-wire/releases/tag/v0.1.0

@@ -1,4 +1,4 @@
-package wire
+package redact
 
 import (
 	"testing"
@@ -31,9 +31,9 @@ func TestRedactStringPatterns(t *testing.T) {
 		{"no secret here", "no secret here"},
 	}
 	for _, tc := range cases {
-		got := redactString(tc.in)
+		got := RedactString(tc.in)
 		if got != tc.want {
-			t.Errorf("redactString(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("RedactString(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

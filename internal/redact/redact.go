@@ -1,4 +1,4 @@
-package wire
+package redact
 
 import (
 	"bytes"
@@ -44,7 +44,7 @@ var (
 func RedactSecrets(v any) any {
 	switch val := v.(type) {
 	case string:
-		return redactString(val)
+		return RedactString(val)
 	case map[string]any:
 		out := make(map[string]any, len(val))
 		for k, v2 := range val {
@@ -66,12 +66,12 @@ func RedactSecrets(v any) any {
 		dec.UseNumber()
 		var inner any
 		if err := dec.Decode(&inner); err != nil {
-			return json.RawMessage(redactString(string(val)))
+			return json.RawMessage(RedactString(string(val)))
 		}
 		redacted := RedactSecrets(inner)
 		out, err := json.Marshal(redacted)
 		if err != nil {
-			return json.RawMessage(redactString(string(val)))
+			return json.RawMessage(RedactString(string(val)))
 		}
 		return json.RawMessage(out)
 	default:
@@ -79,7 +79,7 @@ func RedactSecrets(v any) any {
 	}
 }
 
-func redactString(s string) string {
+func RedactString(s string) string {
 	result := s
 	for i, re := range secretPatterns {
 		result = re.ReplaceAllString(result, secretReplacements[i])

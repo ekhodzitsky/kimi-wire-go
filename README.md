@@ -9,7 +9,7 @@
 
 Typed Go client for the [Kimi Code CLI](https://github.com/ekhodzitsky/kimi) Wire protocol.
 
-> **Current version:** latest release is [`v0.1.1`](https://github.com/ekhodzitsky/kimi-wire-go/releases/tag/v0.1.1).
+> **Current version:** latest release is [`v0.2.0`](https://github.com/ekhodzitsky/kimi-wire-go/releases/tag/v0.2.0).
 
 ## Why?
 

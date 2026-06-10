@@ -9,6 +9,7 @@
 *.test
 
 # Output of the go coverage tool
+coverage.out
 *.out
 
 # Go workspace file
@@ -20,3 +21,18 @@ go.work
 
 # OS
 .DS_Store
+
+# OMC agent state
+.omc/
+
+# Build directories
+bin/
+dist/
+build/
+
+# Example binaries
+/quickstart
+/examples/*/quickstart
+
+# Superpowers generated docs
+docs/superpowers/
