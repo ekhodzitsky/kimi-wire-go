@@ -1,13 +1,15 @@
 # kimi-wire
 
-[![CI](https://github.com/ekhodzitsky/kimi-wire/actions/workflows/ci.yml/badge.svg)](https://github.com/ekhodzitsky/kimi-wire/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ekhodzitsky/kimi-wire)](https://goreportcard.com/report/github.com/ekhodzitsky/kimi-wire)
+[![CI](https://github.com/ekhodzitsky/kimi-wire-go/actions/workflows/ci.yml/badge.svg)](https://github.com/ekhodzitsky/kimi-wire-go/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ekhodzitsky/kimi-wire-go)](https://goreportcard.com/report/github.com/ekhodzitsky/kimi-wire-go)
 [![Go Version](https://img.shields.io/badge/go-1.22%2B-blue)](https://go.dev/doc/devel/release)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/ekhodzitsky/kimi-wire)](https://github.com/ekhodzitsky/kimi-wire/releases)
+[![GitHub Tag](https://img.shields.io/github/v/tag/ekhodzitsky/kimi-wire-go)](https://github.com/ekhodzitsky/kimi-wire-go/tags)
 [![GoDoc](https://pkg.go.dev/badge/github.com/ekhodzitsky/kimi-wire)](https://pkg.go.dev/github.com/ekhodzitsky/kimi-wire)
 
 Typed Go client for the [Kimi Code CLI](https://github.com/ekhodzitsky/kimi) Wire protocol.
+
+> **Current version:** latest tag is [`v0.1.0`](https://github.com/ekhodzitsky/kimi-wire-go/releases/tag/v0.1.0); `master` is 4 commits ahead with unreleased improvements.
 
 ## Why?
 
