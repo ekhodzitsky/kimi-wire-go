@@ -1,0 +1,15 @@
+description: "Typed Go client for the Kimi Code CLI Wire protocol. JSON-RPC 2.0, secret redaction, pluggable transports."
+topics:
+  - kimi
+  - ai-agent
+  - llm
+  - agent-sdk
+  - model-context-protocol
+  - mcp
+  - wire-protocol
+  - cli-automation
+  - go
+  - golang
+  - sdk
+  - client
+  - json-rpc
