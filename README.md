@@ -1,19 +1,33 @@
-# kimi-wire (Go)
+# kimi-wire
 
 [![CI](https://github.com/ekhodzitsky/kimi-wire/actions/workflows/ci.yml/badge.svg)](https://github.com/ekhodzitsky/kimi-wire/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ekhodzitsky/kimi-wire)](https://goreportcard.com/report/github.com/ekhodzitsky/kimi-wire)
+[![Go Version](https://img.shields.io/badge/go-1.22%2B-blue)](https://go.dev/doc/devel/release)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/ekhodzitsky/kimi-wire)](https://github.com/ekhodzitsky/kimi-wire/releases)
+[![GoDoc](https://pkg.go.dev/badge/github.com/ekhodzitsky/kimi-wire)](https://pkg.go.dev/github.com/ekhodzitsky/kimi-wire)
 
 Typed Go client for the [Kimi Code CLI](https://github.com/ekhodzitsky/kimi) Wire protocol.
 
-## Overview
+## Why?
 
-The Wire protocol is a JSON-RPC 2.0 based bidirectional communication protocol exposed by `kimi --wire`. This library provides:
+Building on top of `kimi --wire` means speaking JSON-RPC 2.0 over stdin/stdout. Without a typed client, you end up hand-rolling structs, chasing field names, and hoping your serialization matches the agent's expectations.
 
-- **Strongly typed protocol structs** (`Event`, `Request`, `PromptResult`, ...)
-- **High-level `Client`** with methods: `Prompt`, `Replay`, `Steer`, `SetPlanMode`, `Cancel`, `Initialize`
-- **`Transport` abstraction** for stdio (child process), in-memory channels, or custom backends
-- **Secret redaction** for wire logs and error messages
-- **Serde roundtrip guarantees** for all protocol types
+**kimi-wire solves four hard problems out of the box:**
+
+1. **Stop guessing JSON-RPC shapes.** Get strongly typed `Event`, `Request`, `PromptResult`, and the rest of the protocol surface. The compiler catches drift before it reaches runtime.
+2. **Keep secrets out of logs.** Wire traffic is rich with API keys, tokens, and credentials. The library scrubs them automatically from error messages and provides a helper for log redaction.
+3. **Test without a child process.** `ChannelTransport` and `InMemoryTransport` let you unit-test agent interactions in-memory. No process spawning, no flaky CI.
+4. **One client, many transports.** Swap between stdio, in-memory channels, or a custom transport without changing client code.
+
+## Features
+
+- Strongly typed protocol structs (`Event`, `Request`, `PromptResult`, ...)
+- High-level `Client` with `Prompt`, `Replay`, `Steer`, `SetPlanMode`, `Cancel`, `Initialize`
+- Pluggable `Transport` abstraction: stdio, in-memory channels, custom transport
+- Built-in secret redaction for wire logs and error messages
+- JSON-RPC 2.0 compliant message framing
+- Idiomatic Go errors compatible with `errors.As` / `errors.Is`
 
 ## Requirements
 
