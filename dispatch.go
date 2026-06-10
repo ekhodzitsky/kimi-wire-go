@@ -21,17 +21,24 @@ func (c *Client) Dispatch(ctx context.Context, handler Handler) error {
 			}
 			msg, err := ParseWireMessage(*raw)
 			if err != nil {
+				// Malformed dispatch message: drop and continue.
 				continue
 			}
 			switch m := msg.(type) {
 			case EventMessage:
-				_ = handler.HandleEvent(ctx, m.Event)
+				if err := handler.HandleEvent(ctx, m.Event); err != nil {
+					return err
+				}
 			case RequestMessage:
 				resp, err := handler.HandleRequest(ctx, m.Request)
 				if err != nil {
-					_ = c.SendError(ctx, m.ID, -32603, err.Error())
+					if sendErr := c.SendError(ctx, m.ID, -32603, redactString(err.Error())); sendErr != nil {
+						return sendErr
+					}
 				} else {
-					_ = c.SendResponse(ctx, m.ID, resp)
+					if sendErr := c.SendResponse(ctx, m.ID, resp); sendErr != nil {
+						return sendErr
+					}
 				}
 			}
 		}

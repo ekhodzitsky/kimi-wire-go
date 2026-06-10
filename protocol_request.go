@@ -104,8 +104,19 @@ type HookResponse struct {
 	Reason    string     `json:"reason"`
 }
 
+// Kind returns the wire type name of a Request.
+func Kind(r Request) string {
+	if r == nil {
+		return ""
+	}
+	return r.requestType()
+}
+
 // MarshalRequest serializes a Request to the wire envelope format.
 func MarshalRequest(r Request) ([]byte, error) {
+	if r == nil {
+		return nil, fmt.Errorf("cannot marshal nil request")
+	}
 	payload, err := json.Marshal(r)
 	if err != nil {
 		return nil, err

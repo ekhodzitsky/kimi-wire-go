@@ -2,12 +2,18 @@ package wire
 
 import "encoding/json"
 
+// Wire protocol version constants.
+const (
+	WireProtocolVersion       = "1.10"
+	WireProtocolLegacyVersion = "legacy/no-handshake"
+)
+
 // InitializeParams is the parameter for the initialize method.
 type InitializeParams struct {
-	ProtocolVersion string               `json:"protocol_version"`
-	Client          *ClientInfo           `json:"client,omitempty"`
-	ExternalTools   []ExternalTool        `json:"external_tools,omitempty"`
-	Capabilities    *ClientCapabilities   `json:"capabilities,omitempty"`
+	ProtocolVersion string                 `json:"protocol_version"`
+	Client          *ClientInfo            `json:"client,omitempty"`
+	ExternalTools   []ExternalTool         `json:"external_tools,omitempty"`
+	Capabilities    *ClientCapabilities    `json:"capabilities,omitempty"`
 	Hooks           []WireHookSubscription `json:"hooks,omitempty"`
 }
 
@@ -19,8 +25,8 @@ type ClientInfo struct {
 
 // ClientCapabilities are capabilities advertised by the client.
 type ClientCapabilities struct {
-	SupportsQuestion  *bool `json:"supports_question,omitempty"`
-	SupportsPlanMode  *bool `json:"supports_plan_mode,omitempty"`
+	SupportsQuestion *bool `json:"supports_question,omitempty"`
+	SupportsPlanMode *bool `json:"supports_plan_mode,omitempty"`
 }
 
 // WireHookSubscription is a hook subscription.
@@ -40,9 +46,9 @@ type ExternalTool struct {
 
 // InitializeResult is the result of initialize.
 type InitializeResult struct {
-	ProtocolVersion string              `json:"protocol_version"`
-	Server          ServerInfo          `json:"server"`
-	SlashCommands   []SlashCommandInfo  `json:"slash_commands"`
+	ProtocolVersion string               `json:"protocol_version"`
+	Server          ServerInfo           `json:"server"`
+	SlashCommands   []SlashCommandInfo   `json:"slash_commands"`
 	ExternalTools   *ExternalToolsResult `json:"external_tools,omitempty"`
 	Capabilities    *ServerCapabilities  `json:"capabilities,omitempty"`
 	Hooks           *HooksInfo           `json:"hooks,omitempty"`
@@ -99,11 +105,11 @@ type PromptResult struct {
 type PromptStatus string
 
 const (
-	PromptStatusFinished         PromptStatus = "finished"
-	PromptStatusCancelled        PromptStatus = "cancelled"
-	PromptStatusMaxStepsReached  PromptStatus = "max_steps_reached"
-	PromptStatusPending          PromptStatus = "pending"
-	PromptStatusUnexpectedEof    PromptStatus = "unexpected_eof"
+	PromptStatusFinished        PromptStatus = "finished"
+	PromptStatusCancelled       PromptStatus = "cancelled"
+	PromptStatusMaxStepsReached PromptStatus = "max_steps_reached"
+	PromptStatusPending         PromptStatus = "pending"
+	PromptStatusUnexpectedEof   PromptStatus = "unexpected_eof"
 )
 
 // ReplayParams is the parameter for the replay method.

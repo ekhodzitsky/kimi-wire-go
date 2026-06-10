@@ -16,6 +16,23 @@ type EventMessage struct {
 
 func (EventMessage) wireMessageMarker() {}
 
+// MarshalJSON serializes an EventMessage to JSON-RPC 2.0 wire format.
+func (m EventMessage) MarshalJSON() ([]byte, error) {
+	payload, err := MarshalEvent(m.Event)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params"`
+	}{
+		JSONRPC: m.JSONRPC,
+		Method:  m.Method,
+		Params:  payload,
+	})
+}
+
 // RequestMessage is an incoming request from the agent.
 type RequestMessage struct {
 	JSONRPC string  `json:"jsonrpc"`
@@ -25,6 +42,25 @@ type RequestMessage struct {
 }
 
 func (RequestMessage) wireMessageMarker() {}
+
+// MarshalJSON serializes a RequestMessage to JSON-RPC 2.0 wire format.
+func (m RequestMessage) MarshalJSON() ([]byte, error) {
+	payload, err := MarshalRequest(m.Request)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Method  string          `json:"method"`
+		ID      string          `json:"id"`
+		Params  json.RawMessage `json:"params"`
+	}{
+		JSONRPC: m.JSONRPC,
+		Method:  m.Method,
+		ID:      m.ID,
+		Params:  payload,
+	})
+}
 
 // SuccessResponseMessage is a JSON-RPC success response.
 type SuccessResponseMessage struct {
@@ -46,6 +82,9 @@ func (ErrorResponseMessage) wireMessageMarker() {}
 
 // ParseWireMessage parses a RawWireMessage into a typed WireMessage.
 func ParseWireMessage(raw RawWireMessage) (WireMessage, error) {
+	if raw.JSONRPC != "2.0" {
+		return nil, &WireError{Kind: ErrJSONParse, Message: "invalid jsonrpc version"}
+	}
 	if raw.Method != "" {
 		switch raw.Method {
 		case "request":

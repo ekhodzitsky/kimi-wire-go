@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   test:
@@ -17,3 +17,5 @@ jobs:
       - run: go build ./...
       - run: go test ./... -race -coverprofile=coverage.out
       - run: go tool cover -func=coverage.out
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"

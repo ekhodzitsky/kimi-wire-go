@@ -86,7 +86,7 @@ func (ContentPartEvent) eventType() string { return "ContentPart" }
 
 // ToolCallEvent is a tool call from the model.
 type ToolCallEvent struct {
-	ID       string          `json:"id"`
+	ID       string           `json:"id"`
 	Function ToolCallFunction `json:"function"`
 	Extras   json.RawMessage  `json:"extras,omitempty"`
 }
@@ -208,25 +208,51 @@ type HookResolvedEvent struct {
 
 func (HookResolvedEvent) eventType() string { return "HookResolved" }
 
+// TypeName returns the wire type name of an Event.
+func TypeName(e Event) string {
+	if e == nil {
+		return ""
+	}
+	return e.eventType()
+}
+
+func toolCallEventPayload(v ToolCallEvent) struct {
+	Type     string           `json:"type"`
+	ID       string           `json:"id"`
+	Function ToolCallFunction `json:"function"`
+	Extras   json.RawMessage  `json:"extras,omitempty"`
+} {
+	return struct {
+		Type     string           `json:"type"`
+		ID       string           `json:"id"`
+		Function ToolCallFunction `json:"function"`
+		Extras   json.RawMessage  `json:"extras,omitempty"`
+	}{
+		Type:     "function",
+		ID:       v.ID,
+		Function: v.Function,
+		Extras:   v.Extras,
+	}
+}
+
 // MarshalEvent serializes an Event to the wire envelope format.
 func MarshalEvent(e Event) ([]byte, error) {
+	if e == nil {
+		return nil, fmt.Errorf("cannot marshal nil event")
+	}
 	var payload json.RawMessage
 	var err error
 
 	switch v := e.(type) {
+	case ContentPartEvent:
+		// Payload is the ContentPart directly (no wrapper).
+		payload, err = json.Marshal(v.Part)
+	case *ContentPartEvent:
+		payload, err = json.Marshal(v.Part)
 	case ToolCallEvent:
-		// The payload must include the inner `type: "function"` discriminator.
-		payload, err = json.Marshal(struct {
-			Type     string           `json:"type"`
-			ID       string           `json:"id"`
-			Function ToolCallFunction `json:"function"`
-			Extras   json.RawMessage  `json:"extras,omitempty"`
-		}{
-			Type:     "function",
-			ID:       v.ID,
-			Function: v.Function,
-			Extras:   v.Extras,
-		})
+		payload, err = json.Marshal(toolCallEventPayload(v))
+	case *ToolCallEvent:
+		payload, err = json.Marshal(toolCallEventPayload(*v))
 	default:
 		payload, err = json.Marshal(e)
 	}
@@ -234,9 +260,12 @@ func MarshalEvent(e Event) ([]byte, error) {
 		return nil, err
 	}
 
-	return json.Marshal(map[string]any{
-		"type":    e.eventType(),
-		"payload": payload,
+	return json.Marshal(struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}{
+		Type:    e.eventType(),
+		Payload: payload,
 	})
 }
 
@@ -289,11 +318,17 @@ func ParseEvent(data []byte) (Event, error) {
 		}
 		return ContentPartEvent{Part: part}, nil
 	case "ToolCall":
-		var p ToolCallEvent
-		if err := json.Unmarshal(env.Payload, &p); err != nil {
+		var payload struct {
+			Type string `json:"type"`
+			ToolCallEvent
+		}
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
 			return nil, err
 		}
-		return p, nil
+		if payload.Type != "function" {
+			return nil, fmt.Errorf("tool call payload must have type=function, got %q", payload.Type)
+		}
+		return payload.ToolCallEvent, nil
 	case "ToolCallPart":
 		var p ToolCallPartEvent
 		if err := json.Unmarshal(env.Payload, &p); err != nil {

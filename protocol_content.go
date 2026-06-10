@@ -1,6 +1,10 @@
 package wire
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
 
 // UserInput can be plain text or an array of content parts.
 type UserInput struct {
@@ -8,11 +12,46 @@ type UserInput struct {
 	Parts []ContentPart `json:"parts,omitempty"`
 }
 
+// MarshalJSON serializes UserInput as either a string or an array of ContentPart.
+func (u UserInput) MarshalJSON() ([]byte, error) {
+	if u.Text != "" && len(u.Parts) > 0 {
+		return nil, fmt.Errorf("user_input cannot have both text and parts")
+	}
+	if u.Text != "" {
+		return json.Marshal(u.Text)
+	}
+	if len(u.Parts) > 0 {
+		return json.Marshal(u.Parts)
+	}
+	return json.Marshal("")
+}
+
+// UnmarshalJSON parses UserInput from either a string or an array of ContentPart.
+func (u *UserInput) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("user_input must be a string or an array of content parts, got null")
+	}
+	*u = UserInput{}
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) == 0 {
+		return fmt.Errorf("user_input must be a string or an array of content parts, got %s", string(data))
+	}
+	switch trimmed[0] {
+	case '"':
+		return json.Unmarshal(data, &u.Text)
+	case '[':
+		return json.Unmarshal(data, &u.Parts)
+	case 'n':
+		return fmt.Errorf("user_input must be a string or an array of content parts, got null")
+	}
+	return fmt.Errorf("user_input must be a string or an array of content parts, got %s", string(data))
+}
+
 // ContentPart is a content part in a message.
 type ContentPart struct {
-	Type     string       `json:"type"`
-	Text     *TextPart    `json:"text,omitempty"`
-	Think    *ThinkPart   `json:"think,omitempty"`
+	Type     string        `json:"type"`
+	Text     *TextPart     `json:"text,omitempty"`
+	Think    *ThinkPart    `json:"think,omitempty"`
 	ImageURL *ImageURLPart `json:"image_url,omitempty"`
 	AudioURL *AudioURLPart `json:"audio_url,omitempty"`
 	VideoURL *VideoURLPart `json:"video_url,omitempty"`
@@ -104,7 +143,7 @@ type ToolReturnValue struct {
 	IsError bool            `json:"is_error"`
 	Output  ToolOutput      `json:"output"`
 	Message string          `json:"message"`
-	Display []DisplayBlock  `json:"display"`
+	Display []DisplayBlock  `json:"display,omitempty"`
 	Extras  json.RawMessage `json:"extras,omitempty"`
 }
 
@@ -114,24 +153,59 @@ type ToolOutput struct {
 	Parts []ContentPart `json:"parts,omitempty"`
 }
 
+// MarshalJSON serializes ToolOutput as either a string or an array of ContentPart.
+func (o ToolOutput) MarshalJSON() ([]byte, error) {
+	if o.Text != "" && len(o.Parts) > 0 {
+		return nil, fmt.Errorf("tool_output cannot have both text and parts")
+	}
+	if o.Text != "" {
+		return json.Marshal(o.Text)
+	}
+	if len(o.Parts) > 0 {
+		return json.Marshal(o.Parts)
+	}
+	return json.Marshal("")
+}
+
+// UnmarshalJSON parses ToolOutput from either a string or an array of ContentPart.
+func (o *ToolOutput) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("tool_output must be a string or an array of content parts, got null")
+	}
+	*o = ToolOutput{}
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) == 0 {
+		return fmt.Errorf("tool_output must be a string or an array of content parts, got %s", string(data))
+	}
+	switch trimmed[0] {
+	case '"':
+		return json.Unmarshal(data, &o.Text)
+	case '[':
+		return json.Unmarshal(data, &o.Parts)
+	case 'n':
+		return fmt.Errorf("tool_output must be a string or an array of content parts, got null")
+	}
+	return fmt.Errorf("tool_output must be a string or an array of content parts, got %s", string(data))
+}
+
 // DisplayBlock builders.
 
-// DisplayBlockBrief creates a brief text display block.
-func DisplayBlockBrief(text string) DisplayBlock {
+// NewDisplayBlockBrief creates a brief text display block.
+func NewDisplayBlockBrief(text string) DisplayBlock {
 	return DisplayBlock{Type: DisplayBlockTypeBrief, Text: text}
 }
 
-// DisplayBlockDiff creates a diff display block.
-func DisplayBlockDiff(path, oldText, newText string) DisplayBlock {
+// NewDisplayBlockDiff creates a diff display block.
+func NewDisplayBlockDiff(path, oldText, newText string) DisplayBlock {
 	return DisplayBlock{Type: DisplayBlockTypeDiff, Path: path, OldText: oldText, NewText: newText}
 }
 
-// DisplayBlockTodo creates a todo list display block.
-func DisplayBlockTodo(items []TodoDisplayItem) DisplayBlock {
+// NewDisplayBlockTodo creates a todo list display block.
+func NewDisplayBlockTodo(items []TodoDisplayItem) DisplayBlock {
 	return DisplayBlock{Type: DisplayBlockTypeTodo, Items: items}
 }
 
-// DisplayBlockShell creates a shell command display block.
-func DisplayBlockShell(command, language string) DisplayBlock {
+// NewDisplayBlockShell creates a shell command display block.
+func NewDisplayBlockShell(command, language string) DisplayBlock {
 	return DisplayBlock{Type: DisplayBlockTypeShell, Command: command, Language: language}
 }

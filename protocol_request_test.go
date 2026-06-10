@@ -47,3 +47,12 @@ func TestRequestToolCallRequestRoundtrip(t *testing.T) {
 		t.Fatalf("name mismatch")
 	}
 }
+
+func TestKind(t *testing.T) {
+	if got := Kind(ToolCallRequest{ID: "tc1", Name: "read"}); got != "ToolCallRequest" {
+		t.Fatalf("expected ToolCallRequest, got %q", got)
+	}
+	if got := Kind(nil); got != "" {
+		t.Fatalf("expected empty string for nil, got %q", got)
+	}
+}

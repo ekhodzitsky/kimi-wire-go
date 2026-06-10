@@ -27,15 +27,20 @@ func (t *InMemoryTransport) ReadLine(ctx context.Context) (string, error) {
 		}
 		return line, nil
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return "", &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
 	}
 }
 
 func (t *InMemoryTransport) WriteLine(ctx context.Context, line string) error {
+	select {
+	case <-ctx.Done():
+		return &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
+	default:
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return io.ErrClosedPipe
+		return &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
 	}
 	t.outgoing = append(t.outgoing, line)
 	return nil
@@ -52,8 +57,18 @@ func (t *InMemoryTransport) Close() error {
 }
 
 // Inject adds an incoming line for the client to read.
-func (t *InMemoryTransport) Inject(line string) {
-	t.incoming <- line
+func (t *InMemoryTransport) Inject(line string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return &WireError{Kind: ErrStreamClosed, Message: "transport closed"}
+	}
+	select {
+	case t.incoming <- line:
+		return nil
+	default:
+		return &WireError{Kind: ErrIO, Message: "incoming buffer full"}
+	}
 }
 
 // Outgoing returns all lines written by the client.

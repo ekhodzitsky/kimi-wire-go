@@ -10,29 +10,35 @@ import (
 	"time"
 )
 
-const maxPendingMessages = 1024
-
 // Client is a high-level wire protocol client.
+// The first fields are 64-bit atomics; keep them at the top of the struct
+// for alignment compatibility on 32-bit platforms.
 type Client struct {
-	transport      Transport
-	requestCounter uint64
-	pending        map[string]chan *RawWireMessage
-	oooBuffer      []*RawWireMessage // out-of-order messages
-	mu, oooMu      sync.Mutex
-	handshakeDone  bool
-	defaultTimeout time.Duration
-	maxIORetries   uint32
-	readerDone     chan struct{}
-	dispatchCh     chan *RawWireMessage
+	requestCounter    uint64
+	defaultTimeout    atomic.Int64 // nanoseconds; 0 means none
+	transport         Transport
+	pending           map[string]chan *RawWireMessage
+	oooBuffer         []*RawWireMessage // out-of-order messages
+	mu                sync.Mutex
+	handshakeDone     atomic.Bool
+	readerDone        chan struct{}
+	dispatchCh        chan *RawWireMessage
+	dispatchCloseOnce sync.Once
+	stopCh            chan struct{}
+	stopOnce          sync.Once
 }
 
 // NewClient creates a new client backed by the given transport.
 func NewClient(transport Transport) *Client {
+	if transport == nil {
+		panic("wire: nil transport")
+	}
 	c := &Client{
 		transport:  transport,
 		pending:    make(map[string]chan *RawWireMessage),
 		readerDone: make(chan struct{}),
 		dispatchCh: make(chan *RawWireMessage, 1024),
+		stopCh:     make(chan struct{}),
 	}
 	go c.readerLoop()
 	return c
@@ -44,73 +50,106 @@ func (c *Client) nextID() string {
 
 func (c *Client) readerLoop() {
 	defer close(c.readerDone)
+	defer c.dispatchCloseOnce.Do(func() { close(c.dispatchCh) })
 	for {
 		line, err := c.transport.ReadLine(context.Background())
 		if err != nil {
+			c.closePending(err)
 			return
 		}
-		var raw RawWireMessage
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
+		raw := new(RawWireMessage)
+		if err := json.Unmarshal([]byte(line), raw); err != nil {
+			parseErr := &WireError{Kind: ErrJSONParse, Message: err.Error(), Cause: err}
+			c.closePending(parseErr)
+			return
 		}
 
-		// Events and requests go to the dispatch channel.
-		if raw.Method == "event" || raw.Method == "request" {
-			select {
-			case c.dispatchCh <- &raw:
+		if raw.Method != "" {
+			switch raw.Method {
+			case "event", "request":
+				select {
+				case c.dispatchCh <- raw:
+				case <-c.stopCh:
+					return
+				}
 			default:
-				// Drop if dispatch buffer is full.
+				// Unknown method: drop.
 			}
 			continue
 		}
 
 		c.mu.Lock()
 		ch, ok := c.pending[raw.ID]
-		c.mu.Unlock()
 		if ok {
-			ch <- &raw
-		} else {
-			c.oooMu.Lock()
-			if len(c.oooBuffer) < maxPendingMessages {
-				c.oooBuffer = append(c.oooBuffer, &raw)
+			c.mu.Unlock()
+			select {
+			case ch <- raw:
+			case <-c.stopCh:
+				return
 			}
-			c.oooMu.Unlock()
+		} else {
+			c.oooBuffer = append(c.oooBuffer, raw)
+			c.mu.Unlock()
 		}
 	}
 }
 
-func (c *Client) sendRequest(ctx context.Context, req any) error {
-	data, err := json.Marshal(req)
+func (c *Client) closePending(transportErr error) {
+	c.mu.Lock()
+	pendingCopy := make(map[string]chan *RawWireMessage, len(c.pending))
+	for id, ch := range c.pending {
+		pendingCopy[id] = ch
+		delete(c.pending, id)
+	}
+	c.mu.Unlock()
+
+	safeMsg := redactString(transportErr.Error())
+	for _, ch := range pendingCopy {
+		msg := &RawWireMessage{Error: &JSONRPCError{Code: -1, Message: safeMsg}}
+		select {
+		case ch <- msg:
+		default:
+		}
+	}
+}
+
+func (c *Client) writeMessage(ctx context.Context, msg any) error {
+	data, err := json.Marshal(msg)
 	if err != nil {
-		return &WireError{Kind: ErrJSONSerialize, Message: err.Error()}
+		return &WireError{Kind: ErrJSONSerialize, Message: err.Error(), Cause: err}
 	}
 	return c.transport.WriteLine(ctx, string(data))
 }
 
 func (c *Client) readResponse(ctx context.Context, expectedID string, result any) error {
-	c.oooMu.Lock()
-	for i, msg := range c.oooBuffer {
-		if msg.ID == expectedID {
+	ch := make(chan *RawWireMessage, 1)
+
+	c.mu.Lock()
+	for i := 0; i < len(c.oooBuffer); i++ {
+		if c.oooBuffer[i].ID == expectedID {
+			msg := c.oooBuffer[i]
 			c.oooBuffer = append(c.oooBuffer[:i], c.oooBuffer[i+1:]...)
-			c.oooMu.Unlock()
+			c.mu.Unlock()
 			return c.decodeResponse(msg, result)
 		}
 	}
-	c.oooMu.Unlock()
-
-	ch := make(chan *RawWireMessage, 1)
-	c.mu.Lock()
 	c.pending[expectedID] = ch
 	c.mu.Unlock()
+
 	defer func() {
 		c.mu.Lock()
 		delete(c.pending, expectedID)
+		// Drain any late response to prevent goroutine leak.
+		select {
+		case <-ch:
+		default:
+		}
 		c.mu.Unlock()
 	}()
 
-	if c.defaultTimeout > 0 {
+	if d := c.defaultTimeout.Load(); d > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.defaultTimeout)
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(d))
 		defer cancel()
 	}
 
@@ -118,7 +157,7 @@ func (c *Client) readResponse(ctx context.Context, expectedID string, result any
 	case msg := <-ch:
 		return c.decodeResponse(msg, result)
 	case <-ctx.Done():
-		return &WireError{Kind: ErrTimeout, Message: ctx.Err().Error()}
+		return &WireError{Kind: ErrTimeout, Message: ctx.Err().Error(), Cause: ctx.Err()}
 	}
 }
 
@@ -126,7 +165,7 @@ func (c *Client) decodeResponse(msg *RawWireMessage, result any) error {
 	if msg.Error != nil {
 		return &WireError{
 			Kind:    ErrRequestFailed,
-			Message: msg.Error.Message,
+			Message: redactString(msg.Error.Message),
 			Code:    msg.Error.Code,
 		}
 	}
@@ -134,7 +173,7 @@ func (c *Client) decodeResponse(msg *RawWireMessage, result any) error {
 		return &WireError{Kind: ErrInternal, Message: "response missing result"}
 	}
 	if err := json.Unmarshal(msg.Result, result); err != nil {
-		return &WireError{Kind: ErrJSONParse, Message: err.Error()}
+		return &WireError{Kind: ErrJSONParse, Message: err.Error(), Cause: err}
 	}
 	return nil
 }
@@ -148,7 +187,7 @@ func (c *Client) Initialize(ctx context.Context, params InitializeParams) (Initi
 		ID:      id,
 		Params:  params,
 	}
-	if err := c.sendRequest(ctx, req); err != nil {
+	if err := c.writeMessage(ctx, req); err != nil {
 		return InitializeResult{}, err
 	}
 
@@ -156,21 +195,21 @@ func (c *Client) Initialize(ctx context.Context, params InitializeParams) (Initi
 	if err := c.readResponse(ctx, id, &result); err != nil {
 		var werr *WireError
 		if errors.As(err, &werr) && werr.Kind == ErrRequestFailed && werr.Code == MethodNotFound {
-			c.handshakeDone = true
+			c.handshakeDone.Store(true)
 			return InitializeResult{
-				ProtocolVersion: "legacy/no-handshake",
+				ProtocolVersion: WireProtocolLegacyVersion,
 				Server:          ServerInfo{Name: "unknown", Version: "unknown"},
 				SlashCommands:   []SlashCommandInfo{},
 			}, nil
 		}
 		return InitializeResult{}, err
 	}
-	c.handshakeDone = true
+	c.handshakeDone.Store(true)
 	return result, nil
 }
 
 // IsHandshakeDone returns true if the initialize handshake has completed.
-func (c *Client) IsHandshakeDone() bool { return c.handshakeDone }
+func (c *Client) IsHandshakeDone() bool { return c.handshakeDone.Load() }
 
 // Prompt sends a prompt and waits for the result.
 func (c *Client) Prompt(ctx context.Context, userInput UserInput) (PromptResult, error) {
@@ -181,7 +220,7 @@ func (c *Client) Prompt(ctx context.Context, userInput UserInput) (PromptResult,
 		ID:      id,
 		Params:  PromptParams{UserInput: userInput},
 	}
-	if err := c.sendRequest(ctx, req); err != nil {
+	if err := c.writeMessage(ctx, req); err != nil {
 		return PromptResult{}, err
 	}
 	var result PromptResult
@@ -200,7 +239,7 @@ func (c *Client) Replay(ctx context.Context) (ReplayResult, error) {
 		ID:      id,
 		Params:  ReplayParams{},
 	}
-	if err := c.sendRequest(ctx, req); err != nil {
+	if err := c.writeMessage(ctx, req); err != nil {
 		return ReplayResult{}, err
 	}
 	var result ReplayResult
@@ -219,7 +258,7 @@ func (c *Client) Steer(ctx context.Context, userInput UserInput) (SteerResult, e
 		ID:      id,
 		Params:  SteerParams{UserInput: userInput},
 	}
-	if err := c.sendRequest(ctx, req); err != nil {
+	if err := c.writeMessage(ctx, req); err != nil {
 		return SteerResult{}, err
 	}
 	var result SteerResult
@@ -238,7 +277,7 @@ func (c *Client) SetPlanMode(ctx context.Context, enabled bool) (SetPlanModeResu
 		ID:      id,
 		Params:  SetPlanModeParams{Enabled: enabled},
 	}
-	if err := c.sendRequest(ctx, req); err != nil {
+	if err := c.writeMessage(ctx, req); err != nil {
 		return SetPlanModeResult{}, err
 	}
 	var result SetPlanModeResult
@@ -257,7 +296,7 @@ func (c *Client) Cancel(ctx context.Context) error {
 		ID:      id,
 		Params:  CancelParams{},
 	}
-	if err := c.sendRequest(ctx, req); err != nil {
+	if err := c.writeMessage(ctx, req); err != nil {
 		return err
 	}
 	var result CancelResult
@@ -266,25 +305,45 @@ func (c *Client) Cancel(ctx context.Context) error {
 
 // Shutdown gracefully shuts down the client.
 func (c *Client) Shutdown(ctx context.Context) error {
-	err := c.transport.Close()
-	<-c.readerDone
-	close(c.dispatchCh)
-	return err
+	c.stopOnce.Do(func() { close(c.stopCh) })
+	closeErr := c.transport.Close()
+	select {
+	case <-c.readerDone:
+	case <-ctx.Done():
+		if closeErr != nil {
+			return &WireError{Kind: ErrTimeout, Message: fmt.Sprintf("shutdown: %v (context: %v)", closeErr, ctx.Err()), Cause: ctx.Err()}
+		}
+		return ctx.Err()
+	}
+	return closeErr
 }
 
 // WithDefaultTimeout sets a default timeout for readResponse calls.
 func (c *Client) WithDefaultTimeout(d time.Duration) *Client {
-	c.defaultTimeout = d
+	c.defaultTimeout.Store(int64(d))
 	return c
 }
 
-// WithMaxIORetries sets the maximum number of retries for transient I/O errors.
-func (c *Client) WithMaxIORetries(n uint32) *Client {
-	if n > 5 {
-		n = 5
+// SendRaw sends a pre-built raw wire message.
+func (c *Client) SendRaw(ctx context.Context, raw *RawWireMessage) error {
+	if raw == nil {
+		return &WireError{Kind: ErrInternal, Message: "nil raw message"}
 	}
-	c.maxIORetries = n
-	return c
+	return c.writeMessage(ctx, raw)
+}
+
+// ReadRawMessage reads the next raw wire message from the transport.
+// This is a low-level primitive; most callers should use Prompt/Steer/etc.
+func (c *Client) ReadRawMessage(ctx context.Context) (*RawWireMessage, error) {
+	line, err := c.transport.ReadLine(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw := new(RawWireMessage)
+	if err := json.Unmarshal([]byte(line), raw); err != nil {
+		return nil, &WireError{Kind: ErrJSONParse, Message: err.Error(), Cause: err}
+	}
+	return raw, nil
 }
 
 // SendResponse sends a JSON-RPC success response.
@@ -294,7 +353,7 @@ func (c *Client) SendResponse(ctx context.Context, id string, result any) error 
 		ID:      id,
 		Result:  result,
 	}
-	return c.sendRequest(ctx, resp)
+	return c.writeMessage(ctx, resp)
 }
 
 // SendError sends a JSON-RPC error response.
@@ -302,7 +361,7 @@ func (c *Client) SendError(ctx context.Context, id string, code int, message str
 	resp := JSONRPCErrorResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error:   &JSONRPCError{Code: code, Message: message},
+		Error:   &JSONRPCError{Code: code, Message: redactString(message)},
 	}
-	return c.sendRequest(ctx, resp)
+	return c.writeMessage(ctx, resp)
 }

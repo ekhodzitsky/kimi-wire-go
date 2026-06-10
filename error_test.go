@@ -8,15 +8,17 @@ import (
 
 func TestWireError_Error(t *testing.T) {
 	err := &WireError{Kind: ErrStreamClosed, Message: "wire stream closed"}
-	if err.Error() != "wire stream closed" {
-		t.Fatalf("expected 'wire stream closed', got %q", err.Error())
+	want := "wire error stream_closed: wire stream closed"
+	if err.Error() != want {
+		t.Fatalf("expected %q, got %q", want, err.Error())
 	}
 }
 
 func TestWireError_ValueReceiver(t *testing.T) {
 	var err error = WireError{Kind: ErrStreamClosed, Message: "closed"}
-	if err.Error() != "closed" {
-		t.Fatal("value type does not satisfy error interface")
+	want := "wire error stream_closed: closed"
+	if err.Error() != want {
+		t.Fatalf("expected %q, got %q", want, err.Error())
 	}
 }
 
