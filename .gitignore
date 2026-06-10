@@ -36,3 +36,28 @@ build/
 
 # Superpowers generated docs
 docs/superpowers/
+
+# Vendor directory (if ever used)
+/vendor/
+
+# Local environment files
+.env
+.env.*
+
+# Temporary files
+tmp/
+temp/
+
+# Debug binaries (delve)
+__debug_bin*
+
+# Editor backups
+*.swp
+*.swo
+*~
+
+# Go workspace sum
+go.work.sum
+
+# Air hot reload
+.air.toml
