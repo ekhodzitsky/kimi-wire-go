@@ -88,10 +88,13 @@ func main() {
 Spawns `kimi` as a child process and communicates over stdin/stdout:
 
 ```go
+workDir := "/path/to/project"
+session := "my-session"
+model := "kimi-latest"
 transport, err := wire.SpawnChildProcessTransport("kimi", wire.SpawnOptions{
-    WorkDir: ptr("/path/to/project"),
-    Session: ptr("my-session"),
-    Model:   ptr("kimi-latest"),
+    WorkDir: &workDir,
+    Session: &session,
+    Model:   &model,
 })
 ```
 

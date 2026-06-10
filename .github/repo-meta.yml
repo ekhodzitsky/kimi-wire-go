@@ -4,12 +4,12 @@ topics:
   - ai-agent
   - llm
   - agent-sdk
-  - model-context-protocol
-  - mcp
-  - wire-protocol
   - cli-automation
   - go
   - golang
   - sdk
   - client
   - json-rpc
+  - wire-protocol
+  - kimi-wire
+  - stdio
