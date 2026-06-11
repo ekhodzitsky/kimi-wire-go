@@ -13,6 +13,7 @@ type ChannelTransport struct {
 	tx        chan<- string
 	closeCh   chan struct{}
 	closeOnce sync.Once
+	mu        sync.Mutex
 }
 
 // NewChannelTransportPair creates a connected pair of ChannelTransports.
@@ -37,29 +38,30 @@ func (t *ChannelTransport) ReadLine(ctx context.Context) (string, error) {
 	}
 }
 
-func (t *ChannelTransport) WriteLine(ctx context.Context, line string) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			if fmt.Sprint(r) == "send on closed channel" {
-				err = fmt.Errorf("transport closed")
-			} else {
-				panic(r)
-			}
-		}
-	}()
+func (t *ChannelTransport) WriteLine(ctx context.Context, line string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	select {
 	case <-t.closeCh:
 		return fmt.Errorf("transport closed")
+	default:
+	}
+
+	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case t.tx <- line:
 		return nil
+	default:
+		return fmt.Errorf("transport buffer full")
 	}
 }
 
 func (t *ChannelTransport) Close() error {
 	t.closeOnce.Do(func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		close(t.closeCh)
 		close(t.tx)
 	})
