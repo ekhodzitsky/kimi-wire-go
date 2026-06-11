@@ -16,7 +16,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer transport.Close()
+	defer func() {
+		if err := transport.Close(); err != nil {
+			log.Printf("transport close: %v", err)
+		}
+	}()
 
 	client := wire.NewClient(transport)
 

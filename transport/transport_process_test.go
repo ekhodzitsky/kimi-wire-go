@@ -19,7 +19,11 @@ func TestChildProcessTransportSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	defer tr.Close()
+	defer func() {
+		if err := tr.Close(); err != nil {
+			t.Logf("transport close: %v", err)
+		}
+	}()
 
 	if err := tr.WriteLine(ctx, `{"jsonrpc":"2.0","method":"initialize","id":"1","params":{"protocol_version":"1.10"}}`); err != nil {
 		t.Fatalf("write: %v", err)

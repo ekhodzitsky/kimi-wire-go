@@ -404,7 +404,7 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 	s.activeOp = activeOperation{cancel: t.cancel, done: t.done}
 	s.mu.Unlock()
 
-	if err := s.emitEvent(s.serveCtx, protocol.TurnBeginEvent{UserInput: p.UserInput}); err != nil {
+	if err := s.emitEvent(s.serveCtx, protocol.TurnBeginEvent(p)); err != nil {
 		s.endTurn(id, t, protocol.PromptResult{}, err)
 		return
 	}

@@ -9,10 +9,9 @@ import (
 )
 
 type testHandler struct {
-	t              *testing.T
-	events         []wire.Event
-	approve        bool
-	externalToolOK bool
+	t       *testing.T
+	events  []wire.Event
+	approve bool
 }
 
 func (h *testHandler) HandleEvent(ctx context.Context, event wire.Event) error {
@@ -70,8 +69,16 @@ func TestEchoServerPrompt(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			serverTr, clientTr := wire.NewChannelTransportPair()
-			defer serverTr.Close()
-			defer clientTr.Close()
+			defer func() {
+				if err := serverTr.Close(); err != nil {
+					t.Logf("server transport close: %v", err)
+				}
+			}()
+			defer func() {
+				if err := clientTr.Close(); err != nil {
+					t.Logf("client transport close: %v", err)
+				}
+			}()
 
 			server := wire.NewServer(serverTr, &echoAgent{}, wire.WithServerInfo("echo-server", "0.1.0"))
 			client := wire.NewClient(clientTr)

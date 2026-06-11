@@ -46,7 +46,7 @@ func (a *toolAgent) Prompt(ctx context.Context, input wire.UserInput, turn serve
 	if err != nil {
 		return wire.PromptResult{}, err
 	}
-	_ = turn.Emit(ctx, wire.ToolResultEvent{ToolCallID: resp.ToolCallID, ReturnValue: resp.ReturnValue})
+	_ = turn.Emit(ctx, wire.ToolResultEvent(resp))
 	return wire.PromptResult{Status: wire.PromptStatusFinished}, nil
 }
 
