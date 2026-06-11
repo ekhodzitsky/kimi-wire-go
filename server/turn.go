@@ -29,8 +29,9 @@ type turn struct {
 	steerCh chan protocol.UserInput
 	done    chan struct{}
 
-	mu     sync.Mutex
-	closed bool
+	mu        sync.Mutex
+	closed    bool
+	cancelled bool
 }
 
 func newTurn(s *Server, input protocol.UserInput) *turn {

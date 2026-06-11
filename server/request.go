@@ -72,6 +72,8 @@ func (s *Server) writeMessage(ctx context.Context, msg any) error {
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.transport.WriteLine(ctx, string(b))
 }
 

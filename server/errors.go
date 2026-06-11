@@ -38,6 +38,8 @@ func (s *Server) sendError(id string, code int, msg string) error {
 		s.logf("failed to marshal error response: %v", redact.RedactString(marshalErr.Error()))
 		return marshalErr
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	err := s.transport.WriteLine(s.serveCtx, line)
 	if err != nil {
 		s.logf("failed to write error response: %v", redact.RedactString(err.Error()))

@@ -27,6 +27,7 @@ type Server struct {
 	logf           func(string, ...any)
 
 	mu            sync.Mutex
+	writeMu       sync.Mutex
 	handshakeDone bool
 	negotiated    string
 	clientCaps    protocol.ClientCapabilities
@@ -151,7 +152,14 @@ func (s *Server) readLoop() {
 		var raw protocol.RawWireMessage
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			s.logf("parse error: %v", redact.RedactString(err.Error()))
-			_ = s.sendError("", codeParseError, err.Error())
+			b, _ := json.Marshal(struct {
+				JSONRPC string                 `json:"jsonrpc"`
+				Error   *protocol.JSONRPCError `json:"error"`
+			}{
+				JSONRPC: "2.0",
+				Error:   &protocol.JSONRPCError{Code: codeParseError, Message: err.Error()},
+			})
+			_ = s.transport.WriteLine(s.serveCtx, string(b))
 			continue
 		}
 		if raw.ID != "" && raw.Method == "" {
@@ -394,7 +402,7 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 	}
 
 	s.mu.Lock()
-	if s.activeTurn != nil {
+	if s.activeTurn != nil || s.activeOp.cancel != nil {
 		s.mu.Unlock()
 		_ = s.sendError(id, codeTurnInProgress, "A turn is already in progress")
 		return
@@ -430,7 +438,12 @@ func (s *Server) endTurn(id string, t *turn, result protocol.PromptResult, err e
 		s.activeOp = activeOperation{}
 	}
 	s.mu.Unlock()
-	if err != nil {
+
+	t.mu.Lock()
+	wasCancelled := t.cancelled
+	t.mu.Unlock()
+
+	if err != nil && !wasCancelled && !errors.Is(err, context.Canceled) {
 		code := codeInternalError
 		msg := "internal error"
 		var ce CodedError
@@ -439,6 +452,10 @@ func (s *Server) endTurn(id string, t *turn, result protocol.PromptResult, err e
 			msg = err.Error()
 		}
 		_ = s.sendError(id, code, msg)
+		return
+	}
+	if wasCancelled || errors.Is(err, context.Canceled) {
+		_ = s.sendResponse(id, protocol.PromptResult{Status: protocol.PromptStatusCancelled})
 		return
 	}
 	_ = s.sendResponse(id, result)
@@ -494,10 +511,16 @@ func (s *Server) handleSteer(id string, params json.RawMessage) {
 func (s *Server) handleCancel(id string, params json.RawMessage) {
 	s.mu.Lock()
 	op := s.activeOp
+	t := s.activeTurn
 	s.mu.Unlock()
 	if op.cancel == nil {
 		_ = s.sendError(id, codeTurnInProgress, "No agent turn is in progress")
 		return
+	}
+	if t != nil {
+		t.mu.Lock()
+		t.cancelled = true
+		t.mu.Unlock()
 	}
 	op.cancel()
 	<-op.done
@@ -533,9 +556,19 @@ func (s *Server) handleReplay(id string, params json.RawMessage) {
 			}
 			s.mu.Unlock()
 		}()
+		defer func() {
+			if r := recover(); r != nil {
+				s.logf("panic in Agent.Replay: %v", redact.RedactString(fmt.Sprintf("%v", r)))
+				_ = s.sendError(id, codeInternalError, "internal error")
+			}
+		}()
 		result, err := replayer.Replay(replayCtx, s)
 		if err != nil {
-			_ = s.sendError(id, codeInternalError, err.Error())
+			if errors.Is(err, context.Canceled) {
+				_ = s.sendResponse(id, protocol.ReplayResult{Status: protocol.ReplayStatusCancelled})
+			} else {
+				_ = s.sendError(id, codeInternalError, err.Error())
+			}
 			return
 		}
 		_ = s.sendResponse(id, result)
