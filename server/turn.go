@@ -26,11 +26,8 @@ type turn struct {
 	s       *Server
 	ctx     context.Context
 	cancel  context.CancelFunc
-	input   protocol.UserInput
 	steerCh chan protocol.UserInput
 	done    chan struct{}
-	result  protocol.PromptResult
-	err     error
 
 	mu     sync.Mutex
 	closed bool
@@ -42,7 +39,6 @@ func newTurn(s *Server, input protocol.UserInput) *turn {
 		s:       s,
 		ctx:     ctx,
 		cancel:  cancel,
-		input:   input,
 		steerCh: make(chan protocol.UserInput, 1),
 		done:    make(chan struct{}),
 	}
@@ -64,15 +60,13 @@ func (t *turn) SteerInput(ctx context.Context) (protocol.UserInput, error) {
 	}
 }
 
-func (t *turn) close(result protocol.PromptResult, err error) {
+func (t *turn) close() {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
 		return
 	}
 	t.closed = true
-	t.result = result
-	t.err = err
 	t.mu.Unlock()
 	t.cancel()
 	close(t.done)

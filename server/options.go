@@ -23,6 +23,9 @@ func WithSlashCommands(cmds []protocol.SlashCommandInfo) Option {
 
 // WithExternalToolValidator decides whether an external tool is accepted.
 func WithExternalToolValidator(fn func(protocol.ExternalTool) error) Option {
+	if fn == nil {
+		panic("server: nil tool validator")
+	}
 	return func(s *Server) { s.toolValidator = fn }
 }
 
@@ -38,6 +41,9 @@ func WithDefaultRequestTimeout(d time.Duration) Option {
 
 // WithLogger sets a structured logger for server diagnostics.
 func WithLogger(l *slog.Logger) Option {
+	if l == nil {
+		panic("server: nil logger")
+	}
 	return func(s *Server) {
 		s.logf = func(format string, args ...any) { l.Info(fmt.Sprintf(format, args...)) }
 	}

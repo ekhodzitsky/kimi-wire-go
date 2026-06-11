@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ekhodzitsky/kimi-wire/internal/redact"
 	"github.com/ekhodzitsky/kimi-wire/protocol"
 )
 
@@ -25,11 +26,11 @@ func (s *Server) sendRequestAndWait(ctx context.Context, req protocol.Request) (
 	defer func() {
 		s.mu.Lock()
 		delete(s.pending, id)
+		s.mu.Unlock()
 		select {
 		case <-ch:
 		default:
 		}
-		s.mu.Unlock()
 	}()
 
 	payload, err := protocol.MarshalRequest(req)
@@ -49,7 +50,7 @@ func (s *Server) sendRequestAndWait(ctx context.Context, req protocol.Request) (
 	select {
 	case msg := <-ch:
 		if msg.Error != nil {
-			return nil, &codedError{code: msg.Error.Code, msg: msg.Error.Message}
+			return nil, &codedError{code: msg.Error.Code, msg: redact.RedactString(msg.Error.Message)}
 		}
 		return msg.Result, nil
 	case <-ctx.Done():
@@ -57,6 +58,13 @@ func (s *Server) sendRequestAndWait(ctx context.Context, req protocol.Request) (
 	case <-s.serveCtx.Done():
 		return nil, s.serveCtx.Err()
 	}
+}
+
+// jsonrpcNotification is a JSON-RPC 2.0 notification (no id field).
+type jsonrpcNotification[T any] struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  T      `json:"params"`
 }
 
 func (s *Server) writeMessage(ctx context.Context, msg any) error {
@@ -72,7 +80,7 @@ func (s *Server) emitEvent(ctx context.Context, event protocol.Event) error {
 	if err != nil {
 		return err
 	}
-	envelope := protocol.JSONRPCRequest[json.RawMessage]{
+	envelope := jsonrpcNotification[json.RawMessage]{
 		JSONRPC: "2.0",
 		Method:  "event",
 		Params:  payload,
@@ -89,11 +97,15 @@ func (t *turn) RequestApproval(ctx context.Context, req protocol.ApprovalRequest
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return protocol.ApprovalResponse{}, err
 	}
+	if resp.RequestID != req.ID {
+		return protocol.ApprovalResponse{}, fmt.Errorf("approval response id mismatch: got %q, want %q", resp.RequestID, req.ID)
+	}
 	return resp, nil
 }
 
 func (t *turn) CallExternalTool(ctx context.Context, req protocol.ToolCallRequest) (protocol.ToolCallResponse, error) {
-	ctx = t.s.applyDefaultTimeout(ctx)
+	ctx, cancel := t.s.applyDefaultTimeout(ctx)
+	defer cancel()
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
 		return protocol.ToolCallResponse{}, err
@@ -101,6 +113,9 @@ func (t *turn) CallExternalTool(ctx context.Context, req protocol.ToolCallReques
 	var resp protocol.ToolCallResponse
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return protocol.ToolCallResponse{}, err
+	}
+	if resp.ToolCallID != req.ID {
+		return protocol.ToolCallResponse{}, fmt.Errorf("tool response id mismatch: got %q, want %q", resp.ToolCallID, req.ID)
 	}
 	return resp, nil
 }
@@ -115,7 +130,8 @@ func (t *turn) AskQuestion(ctx context.Context, req protocol.QuestionRequest) (p
 			msg:  "Client does not support structured questions",
 		}
 	}
-	ctx = t.s.applyDefaultTimeout(ctx)
+	ctx, cancel := t.s.applyDefaultTimeout(ctx)
+	defer cancel()
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
 		return protocol.QuestionResponse{}, err
@@ -123,6 +139,9 @@ func (t *turn) AskQuestion(ctx context.Context, req protocol.QuestionRequest) (p
 	var resp protocol.QuestionResponse
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return protocol.QuestionResponse{}, err
+	}
+	if resp.RequestID != req.ID {
+		return protocol.QuestionResponse{}, fmt.Errorf("question response id mismatch: got %q, want %q", resp.RequestID, req.ID)
 	}
 	return resp, nil
 }
@@ -147,7 +166,8 @@ func (t *turn) TriggerHook(ctx context.Context, req protocol.HookRequest) (proto
 	}
 
 	req.SubscriptionID = sub.id
-	ctx = t.s.applyHookTimeout(ctx, sub.timeout)
+	ctx, cancel := t.s.applyHookTimeout(ctx, sub.timeout)
+	defer cancel()
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
 		return protocol.HookResponse{}, err
@@ -156,29 +176,28 @@ func (t *turn) TriggerHook(ctx context.Context, req protocol.HookRequest) (proto
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return protocol.HookResponse{}, err
 	}
+	if resp.RequestID != req.ID {
+		return protocol.HookResponse{}, fmt.Errorf("hook response id mismatch: got %q, want %q", resp.RequestID, req.ID)
+	}
 	return resp, nil
 }
 
-func (s *Server) applyDefaultTimeout(ctx context.Context) context.Context {
+func (s *Server) applyDefaultTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if s.defaultTimeout <= 0 {
-		return ctx
+		return ctx, func() {}
 	}
 	if _, ok := ctx.Deadline(); ok {
-		return ctx
+		return ctx, func() {}
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
-	_ = cancel // caller owns the original context; timeout applies to this call only
-	return ctx
+	return context.WithTimeout(ctx, s.defaultTimeout)
 }
 
-func (s *Server) applyHookTimeout(ctx context.Context, d time.Duration) context.Context {
+func (s *Server) applyHookTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if d <= 0 {
 		d = 30 * time.Second
 	}
 	if _, ok := ctx.Deadline(); ok {
-		return ctx
+		return ctx, func() {}
 	}
-	ctx, cancel := context.WithTimeout(ctx, d)
-	_ = cancel
-	return ctx
+	return context.WithTimeout(ctx, d)
 }

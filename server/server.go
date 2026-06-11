@@ -34,6 +34,7 @@ type Server struct {
 	externalTools []protocol.ExternalTool
 	hooks         map[string]*hookSubscription
 	activeTurn    *turn
+	activeOp      activeOperation
 
 	requestCounter uint64
 	pending        map[string]chan *protocol.RawWireMessage
@@ -43,6 +44,12 @@ type Server struct {
 	readDone    chan struct{}
 	serveDone   chan struct{}
 	dispatchCh  chan *protocol.RawWireMessage
+	readErr     error
+}
+
+type activeOperation struct {
+	cancel context.CancelFunc
+	done   <-chan struct{}
 }
 
 type hookSubscription struct {
@@ -112,12 +119,13 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	<-s.readDone
 	s.cancelServe()
-	if err := s.serveCtx.Err(); err != nil {
+	err := s.readErr
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 		s.closePending(err)
 	}
 	s.clearActiveTurn()
 	<-s.serveDone
-	return nil
+	return err
 }
 
 // Close closes the underlying transport.
@@ -126,26 +134,32 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) readLoop() {
-	defer close(s.readDone)
+	var readErr error
+	defer func() {
+		s.readErr = readErr
+		close(s.readDone)
+	}()
 	for {
 		line, err := s.transport.ReadLine(s.serveCtx)
 		if err != nil {
-			if err != io.EOF && err != context.Canceled && s.serveCtx.Err() == nil {
+			if err != io.EOF && !errors.Is(err, context.Canceled) && s.serveCtx.Err() == nil {
 				s.logf("read error: %v", redact.RedactString(err.Error()))
 			}
+			readErr = err
 			return
 		}
-		raw := new(protocol.RawWireMessage)
-		if err := json.Unmarshal([]byte(line), raw); err != nil {
+		var raw protocol.RawWireMessage
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			s.logf("parse error: %v", redact.RedactString(err.Error()))
+			_ = s.sendError("", codeParseError, err.Error())
 			continue
 		}
 		if raw.ID != "" && raw.Method == "" {
-			s.routeResponse(raw)
+			s.routeResponse(&raw)
 			continue
 		}
 		select {
-		case s.dispatchCh <- raw:
+		case s.dispatchCh <- &raw:
 		case <-s.serveCtx.Done():
 			return
 		}
@@ -270,7 +284,7 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 			matcher: matcher,
 			timeout: timeout,
 		}
-		hooksConfigured[sub.ID] = sub.Timeout
+		hooksConfigured[sub.Event]++
 	}
 
 	s.mu.Lock()
@@ -286,8 +300,10 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 		ProtocolVersion: negotiated,
 		Server:          s.info,
 		SlashCommands:   s.slashCmds,
-		ExternalTools:   extResult,
 		Capabilities:    &serverCaps,
+	}
+	if len(p.ExternalTools) > 0 {
+		result.ExternalTools = extResult
 	}
 	if len(s.supportedHooks) > 0 || len(hooksConfigured) > 0 {
 		result.Hooks = &protocol.HooksInfo{
@@ -296,26 +312,72 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 		}
 	}
 
-	_ = s.sendResponse(id, result)
+	if err := s.sendResponse(id, result); err != nil {
+		s.logf("failed to send initialize response: %v", redact.RedactString(err.Error()))
+	}
 }
 
 func (s *Server) negotiateVersion(requested string) string {
 	if requested == "" {
 		return protocol.WireProtocolLegacyVersion
 	}
-	if requested < "1.1" {
+	if cmp := semverCompare(requested, "1.1"); cmp < 0 {
 		return protocol.WireProtocolLegacyVersion
 	}
-	if requested > protocol.WireProtocolVersion {
+	if cmp := semverCompare(requested, protocol.WireProtocolVersion); cmp > 0 {
 		return protocol.WireProtocolVersion
 	}
 	return requested
 }
 
-func (s *Server) isHookSupported(event string) bool {
-	if len(s.supportedHooks) == 0 {
-		return true
+// semverCompare compares two dot-separated version strings.
+// It returns -1 if a < b, 0 if equal, 1 if a > b.
+func semverCompare(a, b string) int {
+	partsA := splitVersion(a)
+	partsB := splitVersion(b)
+	for i := 0; i < len(partsA) || i < len(partsB); i++ {
+		var va, vb int
+		if i < len(partsA) {
+			va = partsA[i]
+		}
+		if i < len(partsB) {
+			vb = partsB[i]
+		}
+		if va < vb {
+			return -1
+		}
+		if va > vb {
+			return 1
+		}
 	}
+	return 0
+}
+
+func splitVersion(v string) []int {
+	var out []int
+	start := 0
+	for i := 0; i < len(v); i++ {
+		if v[i] == '.' {
+			out = append(out, atoi(v[start:i]))
+			start = i + 1
+		}
+	}
+	out = append(out, atoi(v[start:]))
+	return out
+}
+
+func atoi(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			break
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n
+}
+
+func (s *Server) isHookSupported(event string) bool {
 	for _, e := range s.supportedHooks {
 		if e == event {
 			return true
@@ -339,6 +401,7 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 	}
 	t := newTurn(s, p.UserInput)
 	s.activeTurn = t
+	s.activeOp = activeOperation{cancel: t.cancel, done: t.done}
 	s.mu.Unlock()
 
 	if err := s.emitEvent(s.serveCtx, protocol.TurnBeginEvent{UserInput: p.UserInput}); err != nil {
@@ -350,7 +413,7 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 		defer func() {
 			if r := recover(); r != nil {
 				s.logf("panic in Agent.Prompt: %v", redact.RedactString(fmt.Sprintf("%v", r)))
-				s.endTurn(id, t, protocol.PromptResult{}, fmt.Errorf("internal error: %v", r))
+				s.endTurn(id, t, protocol.PromptResult{}, &codedError{code: codeInternalError, msg: "internal error"})
 			}
 		}()
 		result, err := s.agent.Prompt(t.ctx, p.UserInput, t)
@@ -360,11 +423,16 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 
 func (s *Server) endTurn(id string, t *turn, result protocol.PromptResult, err error) {
 	_ = s.emitEvent(s.serveCtx, protocol.TurnEndEvent{})
-	s.clearTurn(t)
-	t.close(result, err)
+	t.close()
+	s.mu.Lock()
+	if s.activeTurn == t {
+		s.activeTurn = nil
+		s.activeOp = activeOperation{}
+	}
+	s.mu.Unlock()
 	if err != nil {
 		code := codeInternalError
-		msg := err.Error()
+		msg := "internal error"
 		var ce CodedError
 		if errors.As(err, &ce) && ce.Code() != 0 {
 			code = ce.Code()
@@ -376,24 +444,19 @@ func (s *Server) endTurn(id string, t *turn, result protocol.PromptResult, err e
 	_ = s.sendResponse(id, result)
 }
 
-func (s *Server) clearTurn(t *turn) {
-	s.mu.Lock()
-	if s.activeTurn == t {
-		s.activeTurn = nil
-	}
-	s.mu.Unlock()
-}
-
 func (s *Server) clearActiveTurn() {
 	s.mu.Lock()
+	op := s.activeOp
 	t := s.activeTurn
+	s.activeTurn = nil
+	s.activeOp = activeOperation{}
+	s.mu.Unlock()
 	if t != nil {
-		s.activeTurn = nil
-		s.mu.Unlock()
 		t.cancel()
 		<-t.done
-	} else {
-		s.mu.Unlock()
+	} else if op.cancel != nil {
+		op.cancel()
+		<-op.done
 	}
 }
 
@@ -430,14 +493,14 @@ func (s *Server) handleSteer(id string, params json.RawMessage) {
 
 func (s *Server) handleCancel(id string, params json.RawMessage) {
 	s.mu.Lock()
-	t := s.activeTurn
+	op := s.activeOp
 	s.mu.Unlock()
-	if t == nil {
+	if op.cancel == nil {
 		_ = s.sendError(id, codeTurnInProgress, "No agent turn is in progress")
 		return
 	}
-	t.cancel()
-	<-t.done
+	op.cancel()
+	<-op.done
 	_ = s.sendResponse(id, protocol.CancelResult{})
 }
 
@@ -447,12 +510,36 @@ func (s *Server) handleReplay(id string, params json.RawMessage) {
 		_ = s.sendError(id, codeMethodNotFound, "method not found")
 		return
 	}
-	result, err := replayer.Replay(s.serveCtx, s)
-	if err != nil {
-		_ = s.sendError(id, codeInternalError, err.Error())
+
+	replayCtx, cancel := context.WithCancel(s.serveCtx)
+	done := make(chan struct{})
+
+	s.mu.Lock()
+	if s.activeTurn != nil || s.activeOp.cancel != nil {
+		s.mu.Unlock()
+		cancel()
+		_ = s.sendError(id, codeTurnInProgress, "A turn is already in progress")
 		return
 	}
-	_ = s.sendResponse(id, result)
+	s.activeOp = activeOperation{cancel: cancel, done: done}
+	s.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		defer func() {
+			s.mu.Lock()
+			if s.activeOp.done == done {
+				s.activeOp = activeOperation{}
+			}
+			s.mu.Unlock()
+		}()
+		result, err := replayer.Replay(replayCtx, s)
+		if err != nil {
+			_ = s.sendError(id, codeInternalError, err.Error())
+			return
+		}
+		_ = s.sendResponse(id, result)
+	}()
 }
 
 func (s *Server) handleSetPlanMode(id string, params json.RawMessage) {
@@ -482,11 +569,15 @@ func (s *Server) handleSetPlanMode(id string, params json.RawMessage) {
 }
 
 func (s *Server) sendResponse(id string, result any) error {
-	return s.writeMessage(s.serveCtx, protocol.JSONRPCSuccessResponse[any]{
+	err := s.writeMessage(s.serveCtx, protocol.JSONRPCSuccessResponse[any]{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,
 	})
+	if err != nil {
+		s.logf("failed to write response: %v", redact.RedactString(err.Error()))
+	}
+	return err
 }
 
 // Emit emits an event to the client. It satisfies the Emitter interface for

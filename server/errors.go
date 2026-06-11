@@ -33,15 +33,27 @@ const (
 )
 
 func (s *Server) sendError(id string, code int, msg string) error {
-	return s.transport.WriteLine(s.serveCtx, marshalJSONRPCError(id, code, msg))
+	line, marshalErr := marshalJSONRPCError(id, code, msg)
+	if marshalErr != nil {
+		s.logf("failed to marshal error response: %v", redact.RedactString(marshalErr.Error()))
+		return marshalErr
+	}
+	err := s.transport.WriteLine(s.serveCtx, line)
+	if err != nil {
+		s.logf("failed to write error response: %v", redact.RedactString(err.Error()))
+	}
+	return err
 }
 
-func marshalJSONRPCError(id string, code int, msg string) string {
+func marshalJSONRPCError(id string, code int, msg string) (string, error) {
 	safe := redact.RedactString(msg)
-	b, _ := json.Marshal(protocol.JSONRPCErrorResponse{
+	b, err := json.Marshal(protocol.JSONRPCErrorResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error:   &protocol.JSONRPCError{Code: code, Message: safe},
 	})
-	return string(b)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
