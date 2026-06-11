@@ -62,5 +62,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.github/repo-meta.yml` — unused metadata file.
 - `coverage.out` from working directory.
 
+## [0.3.0] - 2026-06-11
+
+### Added
+
+- New `server/` package implementing the Wire protocol v1.10 server side.
+- `Server`, `Agent`, `Turn`, `Emitter` interfaces; optional `Steerer`, `Replayer`, `PlanModeSwitcher`.
+- Auto-framing of `TurnBegin`/`TurnEnd` around `Agent.Prompt`.
+- Server-to-client requests: `RequestApproval`, `CallExternalTool`, `AskQuestion`, `TriggerHook` with id correlation and timeouts.
+- Capability gating for `QuestionRequest` and `set_plan_mode`.
+- Hook subscriptions stored at `initialize`; `HookRequest` sent only for matching subscriptions.
+- Conformance tests, golden fixtures, and fuzz test for server parsing.
+- `examples/echo-server/` demonstrating a minimal Agent.
+- Root package aliases for all server types and options.
+
+[0.3.0]: https://github.com/ekhodzitsky/kimi-wire/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ekhodzitsky/kimi-wire/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ekhodzitsky/kimi-wire/releases/tag/v0.1.0

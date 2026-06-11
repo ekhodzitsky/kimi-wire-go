@@ -83,6 +83,69 @@ func main() {
 }
 ```
 
+## Server side
+
+The same package also exposes a Wire protocol server so any Go binary can act as an agent backend.
+
+### Agent and Turn interfaces
+
+A server is constructed from a `Transport` and an `Agent`. During a prompt turn the agent receives a `Turn` value that can emit events and make server-to-client requests:
+
+```go
+type Agent interface {
+    Prompt(ctx context.Context, input wire.UserInput, turn wire.Turn) (wire.PromptResult, error)
+}
+
+type Turn interface {
+    Emit(ctx context.Context, event wire.Event) error
+    RequestApproval(ctx context.Context, req wire.ApprovalRequest) (wire.ApprovalResponse, error)
+    CallExternalTool(ctx context.Context, req wire.ToolCallRequest) (wire.ToolCallResponse, error)
+    AskQuestion(ctx context.Context, req wire.QuestionRequest) (wire.QuestionResponse, error)
+    TriggerHook(ctx context.Context, req wire.HookRequest) (wire.HookResponse, error)
+}
+```
+
+### Minimal echo server
+
+```go
+type echoAgent struct{}
+
+func (a *echoAgent) Prompt(ctx context.Context, input wire.UserInput, turn wire.Turn) (wire.PromptResult, error) {
+    _ = turn.Emit(ctx, wire.StepBeginEvent{N: 1})
+    _ = turn.Emit(ctx, wire.ContentPartEvent{
+        Part: wire.ContentPart{
+            Type: wire.ContentPartTypeText,
+            Text: &wire.TextPart{Text: "Echo: " + input.Text},
+        },
+    })
+    return wire.PromptResult{Status: wire.PromptStatusFinished}, nil
+}
+
+func main() {
+    transport := // any wire.Transport, e.g. stdio, channel, or in-memory
+    srv := wire.NewServer(transport, &echoAgent{}, wire.WithServerInfo("echo", "0.1.0"))
+    log.Fatal(srv.Serve(context.Background()))
+}
+```
+
+The server automatically frames `Agent.Prompt` with `TurnBegin`/`TurnEnd` events, enforces one turn at a time, and recovers from panics in the agent callback.
+
+### Optional agent capabilities
+
+Agents may optionally implement:
+
+- `Steerer` — receive mid-turn `steer` input from the client.
+- `Replayer` — handle `replay` requests.
+- `PlanModeSwitcher` — handle `set_plan_mode` requests.
+
+Missing optional capabilities return a JSON-RPC `-32601 method not found` response.
+
+### Capability negotiation and hooks
+
+During `initialize` the server stores client capabilities such as `supports_question` and `supports_plan_mode`. `Turn.AskQuestion` returns an error when the client does not advertise `supports_question`, and `set_plan_mode` is rejected with `-32000` when `supports_plan_mode` is absent.
+
+Hook subscriptions declared by the client at initialize are matched by event name and optional regex. `Turn.TriggerHook` returns `allow` when no subscription matches; otherwise it sends a `HookRequest` and waits for the client response using the subscription timeout.
+
 ## Transport Implementations
 
 ### ChildProcessTransport
