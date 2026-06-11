@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,10 +128,44 @@ func (a *blockingAgent) Prompt(ctx context.Context, input wire.UserInput, turn s
 	}
 }
 
+type blockingPromptAgentWithReplay struct {
+	blocked chan struct{}
+}
+
+func (a *blockingPromptAgentWithReplay) Prompt(ctx context.Context, input wire.UserInput, turn server.Turn) (wire.PromptResult, error) {
+	select {
+	case <-a.blocked:
+		return wire.PromptResult{Status: wire.PromptStatusFinished}, nil
+	case <-ctx.Done():
+		return wire.PromptResult{Status: wire.PromptStatusCancelled}, ctx.Err()
+	}
+}
+
+func (a *blockingPromptAgentWithReplay) Replay(ctx context.Context, emitter server.Emitter) (wire.ReplayResult, error) {
+	return wire.ReplayResult{Status: wire.ReplayStatusFinished}, nil
+}
+
 type panicAgent struct{}
 
 func (a *panicAgent) Prompt(ctx context.Context, input wire.UserInput, turn server.Turn) (wire.PromptResult, error) {
 	panic("boom")
+}
+
+type blockingReplayAgent struct {
+	blocked chan struct{}
+}
+
+func (a *blockingReplayAgent) Prompt(ctx context.Context, input wire.UserInput, turn server.Turn) (wire.PromptResult, error) {
+	return wire.PromptResult{Status: wire.PromptStatusFinished}, nil
+}
+
+func (a *blockingReplayAgent) Replay(ctx context.Context, emitter server.Emitter) (wire.ReplayResult, error) {
+	select {
+	case <-a.blocked:
+		return wire.ReplayResult{Status: wire.ReplayStatusFinished, Events: 1, Requests: 0}, nil
+	case <-ctx.Done():
+		return wire.ReplayResult{Status: wire.ReplayStatusCancelled}, ctx.Err()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +612,233 @@ func TestReplayOptionalInterface(t *testing.T) {
 	}
 }
 
+func TestInvalidParams(t *testing.T) {
+	t.Parallel()
+	clientTrans, cleanup := startServer(t, &happyAgent{})
+	defer cleanup()
+
+	// initialize with malformed params
+	writeReq(t, clientTrans, "initialize", "init1", json.RawMessage(`"not-an-object"`))
+	raw := mustFindResponse(t, clientTrans, "init1")
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32602 {
+		t.Fatalf("expected code -32602, got %d", raw.Error.Code)
+	}
+
+	// prompt with malformed params
+	writeReq(t, clientTrans, "prompt", "prompt1", json.RawMessage(`"not-an-object"`))
+	raw = mustFindResponse(t, clientTrans, "prompt1")
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32602 {
+		t.Fatalf("expected code -32602, got %d", raw.Error.Code)
+	}
+}
+
+func TestParseError(t *testing.T) {
+	t.Parallel()
+	clientTrans, cleanup := startServer(t, &happyAgent{})
+	defer cleanup()
+
+	writeRaw(t, clientTrans, "{broken")
+	raw := readRaw(t, clientTrans)
+	if raw.Method != "" {
+		t.Fatalf("expected response, got method %q", raw.Method)
+	}
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32700 {
+		t.Fatalf("expected code -32700, got %d", raw.Error.Code)
+	}
+	// Current behavior emits an empty id field for parse errors.
+	if raw.ID != "" {
+		t.Fatalf("expected empty id, got %q", raw.ID)
+	}
+}
+
+func TestVersionNegotiation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{"empty", "", wire.WireProtocolLegacyVersion},
+		{"1.0", "1.0", wire.WireProtocolLegacyVersion},
+		{"1.10", "1.10", "1.10"},
+		{"1.11", "1.11", wire.WireProtocolVersion},
+		{"2.0", "2.0", wire.WireProtocolVersion},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clientTrans, cleanup := startServer(t, &happyAgent{})
+			defer cleanup()
+
+			writeReq(t, clientTrans, "initialize", "init1", wire.InitializeParams{ProtocolVersion: tc.version})
+			var initRes wire.InitializeResult
+			readRes(t, clientTrans, "init1", &initRes)
+			if initRes.ProtocolVersion != tc.want {
+				t.Fatalf("expected version %q, got %q", tc.want, initRes.ProtocolVersion)
+			}
+		})
+	}
+}
+
+func TestInitializeResponseFields(t *testing.T) {
+	t.Parallel()
+	clientTrans, cleanup := startServer(t, &happyAgent{},
+		server.WithSlashCommands([]wire.SlashCommandInfo{{Name: "test", Description: "test cmd", Aliases: []string{"t"}}}),
+		server.WithSupportedHooks([]string{"before_tool"}),
+		server.WithExternalToolValidator(func(t wire.ExternalTool) error {
+			if t.Name == "bad_tool" {
+				return errors.New("rejected")
+			}
+			return nil
+		}),
+	)
+	defer cleanup()
+
+	writeReq(t, clientTrans, "initialize", "init1", wire.InitializeParams{
+		ProtocolVersion: wire.WireProtocolVersion,
+		ExternalTools: []wire.ExternalTool{
+			{Name: "good_tool", Description: "a good tool", Parameters: json.RawMessage(`{}`)},
+			{Name: "bad_tool", Description: "a bad tool", Parameters: json.RawMessage(`{}`)},
+		},
+		Hooks: []wire.WireHookSubscription{
+			{ID: "sub1", Event: "before_tool", Matcher: "read_.*", Timeout: 5},
+		},
+	})
+	var initRes wire.InitializeResult
+	readRes(t, clientTrans, "init1", &initRes)
+
+	if len(initRes.SlashCommands) != 1 || initRes.SlashCommands[0].Name != "test" {
+		t.Fatalf("unexpected slash_commands: %v", initRes.SlashCommands)
+	}
+	if initRes.Capabilities == nil {
+		t.Fatalf("expected capabilities, got nil")
+	}
+	if initRes.ExternalTools == nil {
+		t.Fatalf("expected external_tools, got nil")
+	}
+	if len(initRes.ExternalTools.Accepted) != 1 || initRes.ExternalTools.Accepted[0] != "good_tool" {
+		t.Fatalf("unexpected accepted: %v", initRes.ExternalTools.Accepted)
+	}
+	if len(initRes.ExternalTools.Rejected) != 1 || initRes.ExternalTools.Rejected[0].Name != "bad_tool" {
+		t.Fatalf("unexpected rejected: %v", initRes.ExternalTools.Rejected)
+	}
+	if initRes.Hooks == nil {
+		t.Fatalf("expected hooks, got nil")
+	}
+	if len(initRes.Hooks.SupportedEvents) != 1 || initRes.Hooks.SupportedEvents[0] != "before_tool" {
+		t.Fatalf("unexpected supported_events: %v", initRes.Hooks.SupportedEvents)
+	}
+	if initRes.Hooks.Configured == nil || initRes.Hooks.Configured["before_tool"] != 1 {
+		t.Fatalf("unexpected configured: %v", initRes.Hooks.Configured)
+	}
+}
+
+func TestSteerWithoutActiveTurn(t *testing.T) {
+	t.Parallel()
+	clientTrans, cleanup := startServer(t, &steerAgent{steerReceived: make(chan wire.UserInput, 1)})
+	defer cleanup()
+
+	writeReq(t, clientTrans, "initialize", "init1", wire.InitializeParams{ProtocolVersion: wire.WireProtocolVersion})
+	mustReadResponse(t, clientTrans, "init1")
+
+	writeReq(t, clientTrans, "steer", "steer1", wire.SteerParams{UserInput: wire.UserInput{Text: "more"}})
+	raw := mustFindResponse(t, clientTrans, "steer1")
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32000 {
+		t.Fatalf("expected code -32000, got %d", raw.Error.Code)
+	}
+}
+
+func TestCancelWithoutActiveTurn(t *testing.T) {
+	t.Parallel()
+	clientTrans, cleanup := startServer(t, &happyAgent{})
+	defer cleanup()
+
+	writeReq(t, clientTrans, "initialize", "init1", wire.InitializeParams{ProtocolVersion: wire.WireProtocolVersion})
+	mustReadResponse(t, clientTrans, "init1")
+
+	writeReq(t, clientTrans, "cancel", "cancel1", wire.CancelParams{})
+	raw := mustFindResponse(t, clientTrans, "cancel1")
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32000 {
+		t.Fatalf("expected code -32000, got %d", raw.Error.Code)
+	}
+}
+
+func TestReplayDuringActiveTurn(t *testing.T) {
+	t.Parallel()
+	agent := &blockingPromptAgentWithReplay{blocked: make(chan struct{})}
+	clientTrans, cleanup := startServer(t, agent)
+	defer cleanup()
+
+	writeReq(t, clientTrans, "initialize", "init1", wire.InitializeParams{ProtocolVersion: wire.WireProtocolVersion})
+	mustReadResponse(t, clientTrans, "init1")
+
+	writeReq(t, clientTrans, "prompt", "prompt1", wire.PromptParams{UserInput: wire.UserInput{Text: "go"}})
+	mustReadEventType(t, clientTrans, "TurnBegin")
+
+	writeReq(t, clientTrans, "replay", "replay1", wire.ReplayParams{})
+	raw := mustFindResponse(t, clientTrans, "replay1")
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32000 {
+		t.Fatalf("expected code -32000, got %d", raw.Error.Code)
+	}
+
+	close(agent.blocked)
+	mustReadEventType(t, clientTrans, "TurnEnd")
+	var res wire.PromptResult
+	readRes(t, clientTrans, "prompt1", &res)
+	if res.Status != wire.PromptStatusFinished {
+		t.Fatalf("expected finished, got %s", res.Status)
+	}
+}
+
+func TestPromptDuringActiveReplay(t *testing.T) {
+	t.Parallel()
+	agent := &blockingReplayAgent{blocked: make(chan struct{})}
+	clientTrans, cleanup := startServer(t, agent)
+	defer cleanup()
+
+	writeReq(t, clientTrans, "initialize", "init1", wire.InitializeParams{ProtocolVersion: wire.WireProtocolVersion})
+	mustReadResponse(t, clientTrans, "init1")
+
+	writeReq(t, clientTrans, "replay", "replay1", wire.ReplayParams{})
+
+	writeReq(t, clientTrans, "prompt", "prompt1", wire.PromptParams{UserInput: wire.UserInput{Text: "go"}})
+	raw := mustFindResponse(t, clientTrans, "prompt1")
+	if raw.Error == nil {
+		t.Fatalf("expected error")
+	}
+	if raw.Error.Code != -32000 {
+		t.Fatalf("expected code -32000, got %d", raw.Error.Code)
+	}
+	if raw.Error.Message != "A turn is already in progress" {
+		t.Fatalf("expected turn in progress message, got %q", raw.Error.Message)
+	}
+
+	close(agent.blocked)
+	var res wire.ReplayResult
+	readRes(t, clientTrans, "replay1", &res)
+	if res.Status != wire.ReplayStatusFinished {
+		t.Fatalf("expected finished, got %s", res.Status)
+	}
+}
+
 type planModeAgent struct {
 	enabled *bool
 }
@@ -645,6 +907,15 @@ func writeReq(t *testing.T, tr wire.Transport, method, id string, params any) {
 	defer cancel()
 	if err := tr.WriteLine(ctx, string(data)); err != nil {
 		t.Fatalf("write request: %v", err)
+	}
+}
+
+func writeRaw(t *testing.T, tr wire.Transport, data string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := tr.WriteLine(ctx, data); err != nil {
+		t.Fatalf("write raw: %v", err)
 	}
 }
 
