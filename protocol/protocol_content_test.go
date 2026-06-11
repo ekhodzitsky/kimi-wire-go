@@ -58,7 +58,7 @@ func TestUserInputWireString(t *testing.T) {
 
 func TestUserInputWireArray(t *testing.T) {
 	var ui UserInput
-	in := `[{"type":"text","text":{"text":"hi"}}]`
+	in := `[{"type":"text","text":"hi"}]`
 	if err := json.Unmarshal([]byte(in), &ui); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestToolOutputWireString(t *testing.T) {
 
 func TestToolOutputWireArray(t *testing.T) {
 	var to ToolOutput
-	in := `[{"type":"text","text":{"text":"hi"}}]`
+	in := `[{"type":"text","text":"hi"}]`
 	if err := json.Unmarshal([]byte(in), &to); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -107,6 +107,24 @@ func TestContentPartTextRoundtrip(t *testing.T) {
 	}
 	if parsed.Type != ContentPartTypeText || parsed.Text.Text != "hello" {
 		t.Fatalf("roundtrip mismatch")
+	}
+}
+
+func TestContentPartFlatSerialization(t *testing.T) {
+	cp := ContentPart{Type: ContentPartTypeText, Text: &TextPart{Text: "hello"}}
+	b, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"type":"text","text":"hello"}` {
+		t.Fatalf("unexpected: %s", b)
+	}
+	var parsed ContentPart
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Text == nil || parsed.Text.Text != "hello" {
+		t.Fatalf("round-trip failed")
 	}
 }
 

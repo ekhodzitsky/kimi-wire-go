@@ -57,6 +57,75 @@ type ContentPart struct {
 	VideoURL *VideoURLPart `json:"video_url,omitempty"`
 }
 
+// MarshalJSON serializes ContentPart in flat format for text/think types.
+func (cp ContentPart) MarshalJSON() ([]byte, error) {
+	switch cp.Type {
+	case ContentPartTypeText:
+		var flat struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		flat.Type = cp.Type
+		if cp.Text != nil {
+			flat.Text = cp.Text.Text
+		}
+		return json.Marshal(flat)
+	case ContentPartTypeThink:
+		var flat struct {
+			Type      string `json:"type"`
+			Think     string `json:"think"`
+			Encrypted string `json:"encrypted,omitempty"`
+		}
+		flat.Type = cp.Type
+		if cp.Think != nil {
+			flat.Think = cp.Think.Think
+			flat.Encrypted = cp.Think.Encrypted
+		}
+		return json.Marshal(flat)
+	default:
+		type alias ContentPart
+		return json.Marshal(alias(cp))
+	}
+}
+
+// UnmarshalJSON parses ContentPart from flat or nested JSON.
+func (cp *ContentPart) UnmarshalJSON(data []byte) error {
+	type alias ContentPart
+	var aux struct {
+		alias
+		Text  json.RawMessage `json:"text"`
+		Think json.RawMessage `json:"think"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*cp = ContentPart(aux.alias)
+
+	if cp.Text == nil && len(aux.Text) > 0 {
+		var s string
+		if err := json.Unmarshal(aux.Text, &s); err == nil {
+			cp.Text = &TextPart{Text: s}
+		} else {
+			var tp TextPart
+			if err := json.Unmarshal(aux.Text, &tp); err == nil {
+				cp.Text = &tp
+			}
+		}
+	}
+	if cp.Think == nil && len(aux.Think) > 0 {
+		var s string
+		if err := json.Unmarshal(aux.Think, &s); err == nil {
+			cp.Think = &ThinkPart{Think: s}
+		} else {
+			var tp ThinkPart
+			if err := json.Unmarshal(aux.Think, &tp); err == nil {
+				cp.Think = &tp
+			}
+		}
+	}
+	return nil
+}
+
 // ContentPartType values.
 const (
 	ContentPartTypeText     = "text"
