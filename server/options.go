@@ -18,7 +18,9 @@ func WithServerInfo(name, version string) Option {
 
 // WithSlashCommands sets the slash command list returned by initialize.
 func WithSlashCommands(cmds []protocol.SlashCommandInfo) Option {
-	return func(s *Server) { s.slashCmds = cmds }
+	return func(s *Server) {
+		s.slashCmds = append([]protocol.SlashCommandInfo(nil), cmds...)
+	}
 }
 
 // WithExternalToolValidator decides whether an external tool is accepted.

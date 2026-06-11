@@ -32,7 +32,6 @@ type Server struct {
 	negotiated    string
 	clientCaps    protocol.ClientCapabilities
 	serverCaps    protocol.ServerCapabilities
-	externalTools []protocol.ExternalTool
 	hooks         map[string]*hookSubscription
 	activeTurn    *turn
 	activeOp      activeOperation
@@ -46,6 +45,7 @@ type Server struct {
 	serveDone   chan struct{}
 	dispatchCh  chan *protocol.RawWireMessage
 	readErr     error
+	serving     atomic.Bool
 }
 
 type activeOperation struct {
@@ -242,6 +242,14 @@ func (s *Server) closePending(err error) {
 }
 
 func (s *Server) handleInitialize(id string, params json.RawMessage) {
+	s.mu.Lock()
+	if s.handshakeDone {
+		s.mu.Unlock()
+		_ = s.sendError(id, codeInvalidRequest, "initialize already called")
+		return
+	}
+	s.mu.Unlock()
+
 	var p protocol.InitializeParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		_ = s.sendError(id, codeInvalidParams, err.Error())
@@ -300,7 +308,6 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 	s.negotiated = negotiated
 	s.clientCaps = clientCaps
 	s.serverCaps = serverCaps
-	s.externalTools = p.ExternalTools
 	s.hooks = hooks
 	s.mu.Unlock()
 
@@ -492,13 +499,13 @@ func (s *Server) handleSteer(id string, params json.RawMessage) {
 	t := s.activeTurn
 	s.mu.Unlock()
 	if t == nil {
-		_ = s.sendError(id, codeTurnInProgress, "No agent turn is in progress")
+		_ = s.sendError(id, codeNoTurnInProgress, "No agent turn is in progress")
 		return
 	}
 	select {
 	case t.steerCh <- p.UserInput:
 	case <-t.ctx.Done():
-		_ = s.sendError(id, codeTurnInProgress, "No agent turn is in progress")
+		_ = s.sendError(id, codeNoTurnInProgress, "No agent turn is in progress")
 		return
 	}
 	if err := steerer.Steer(t.ctx, p.UserInput); err != nil {
@@ -514,7 +521,7 @@ func (s *Server) handleCancel(id string, params json.RawMessage) {
 	t := s.activeTurn
 	s.mu.Unlock()
 	if op.cancel == nil {
-		_ = s.sendError(id, codeTurnInProgress, "No agent turn is in progress")
+		_ = s.sendError(id, codeNoTurnInProgress, "No agent turn is in progress")
 		return
 	}
 	if t != nil {

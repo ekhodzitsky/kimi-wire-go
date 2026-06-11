@@ -755,8 +755,8 @@ func TestSteerWithoutActiveTurn(t *testing.T) {
 	if raw.Error == nil {
 		t.Fatalf("expected error")
 	}
-	if raw.Error.Code != -32000 {
-		t.Fatalf("expected code -32000, got %d", raw.Error.Code)
+	if raw.Error.Code != -32001 {
+		t.Fatalf("expected code -32001, got %d", raw.Error.Code)
 	}
 }
 
@@ -773,8 +773,8 @@ func TestCancelWithoutActiveTurn(t *testing.T) {
 	if raw.Error == nil {
 		t.Fatalf("expected error")
 	}
-	if raw.Error.Code != -32000 {
-		t.Fatalf("expected code -32000, got %d", raw.Error.Code)
+	if raw.Error.Code != -32001 {
+		t.Fatalf("expected code -32001, got %d", raw.Error.Code)
 	}
 }
 

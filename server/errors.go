@@ -23,6 +23,7 @@ func (e *codedError) Code() int     { return e.code }
 
 const (
 	codeTurnInProgress       = -32000
+	codeNoTurnInProgress     = -32001
 	codeQuestionNotSupported = -32000
 	codePlanModeNotSupported = -32000
 	codeParseError           = -32700
