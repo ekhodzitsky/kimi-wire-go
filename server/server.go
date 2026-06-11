@@ -8,6 +8,7 @@ import (
 	"io"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ekhodzitsky/kimi-wire/internal/redact"
@@ -110,6 +111,10 @@ func New(transport transport.Transport, agent Agent, opts ...Option) *Server {
 
 // Serve runs the server until the transport closes or ctx is cancelled.
 func (s *Server) Serve(ctx context.Context) error {
+	if !s.serving.CompareAndSwap(false, true) {
+		return errors.New("server already serving")
+	}
+	defer s.serving.Store(false)
 	s.serveCtx, s.cancelServe = context.WithCancel(ctx)
 	defer s.cancelServe()
 	s.readDone = make(chan struct{})
@@ -131,6 +136,7 @@ func (s *Server) Serve(ctx context.Context) error {
 
 // Close closes the underlying transport.
 func (s *Server) Close() error {
+	s.serving.Store(false)
 	return s.transport.Close()
 }
 
@@ -437,7 +443,9 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 }
 
 func (s *Server) endTurn(id string, t *turn, result protocol.PromptResult, err error) {
-	_ = s.emitEvent(s.serveCtx, protocol.TurnEndEvent{})
+	if emitErr := s.emitEvent(s.serveCtx, protocol.TurnEndEvent{}); emitErr != nil {
+		s.logf("failed to emit turn end event: %v", redact.RedactString(emitErr.Error()))
+	}
 	t.close()
 	s.mu.Lock()
 	if s.activeTurn == t {
@@ -477,10 +485,18 @@ func (s *Server) clearActiveTurn() {
 	s.mu.Unlock()
 	if t != nil {
 		t.cancel()
-		<-t.done
+		select {
+		case <-t.done:
+		case <-time.After(10 * time.Second):
+			s.logf("warning: clearActiveTurn timed out waiting for turn to finish")
+		}
 	} else if op.cancel != nil {
 		op.cancel()
-		<-op.done
+		select {
+		case <-op.done:
+		case <-time.After(10 * time.Second):
+			s.logf("warning: clearActiveTurn timed out waiting for operation to finish")
+		}
 	}
 }
 
@@ -530,7 +546,12 @@ func (s *Server) handleCancel(id string, params json.RawMessage) {
 		t.mu.Unlock()
 	}
 	op.cancel()
-	<-op.done
+	select {
+	case <-op.done:
+	case <-s.serveCtx.Done():
+		_ = s.sendError(id, codeInternalError, "server shutting down")
+		return
+	}
 	_ = s.sendResponse(id, protocol.CancelResult{})
 }
 

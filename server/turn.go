@@ -19,6 +19,7 @@ type Turn interface {
 	CallExternalTool(ctx context.Context, req protocol.ToolCallRequest) (protocol.ToolCallResponse, error)
 	AskQuestion(ctx context.Context, req protocol.QuestionRequest) (protocol.QuestionResponse, error)
 	TriggerHook(ctx context.Context, req protocol.HookRequest) (protocol.HookResponse, error)
+	SteerInput(ctx context.Context) (protocol.UserInput, error)
 }
 
 // turn represents one active agent turn.
