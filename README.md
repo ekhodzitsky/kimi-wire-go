@@ -7,7 +7,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/ekhodzitsky/kimi-wire-go)](https://github.com/ekhodzitsky/kimi-wire-go/releases)
 [![GoDoc](https://pkg.go.dev/badge/github.com/ekhodzitsky/kimi-wire)](https://pkg.go.dev/github.com/ekhodzitsky/kimi-wire)
 
-Typed Go client for the [Kimi Code CLI](https://github.com/ekhodzitsky/kimi) Wire protocol.
+Typed Go client for the [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli) Wire protocol.
 
 > **Current version:** latest release is [`v0.2.0`](https://github.com/ekhodzitsky/kimi-wire-go/releases/tag/v0.2.0).
 
