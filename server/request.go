@@ -7,16 +7,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ekhodzitsky/kimi-wire"
+	"github.com/ekhodzitsky/kimi-wire/protocol"
 )
 
 func (s *Server) nextRequestID() string {
 	return fmt.Sprintf("srv-%d", atomic.AddUint64(&s.requestCounter, 1))
 }
 
-func (s *Server) sendRequestAndWait(ctx context.Context, req wire.Request) (json.RawMessage, error) {
+func (s *Server) sendRequestAndWait(ctx context.Context, req protocol.Request) (json.RawMessage, error) {
 	id := s.nextRequestID()
-	ch := make(chan *wire.RawWireMessage, 1)
+	ch := make(chan *protocol.RawWireMessage, 1)
 
 	s.mu.Lock()
 	s.pending[id] = ch
@@ -32,11 +32,11 @@ func (s *Server) sendRequestAndWait(ctx context.Context, req wire.Request) (json
 		s.mu.Unlock()
 	}()
 
-	payload, err := wire.MarshalRequest(req)
+	payload, err := protocol.MarshalRequest(req)
 	if err != nil {
 		return nil, err
 	}
-	envelope := wire.JSONRPCRequest[json.RawMessage]{
+	envelope := protocol.JSONRPCRequest[json.RawMessage]{
 		JSONRPC: "2.0",
 		Method:  "request",
 		ID:      id,
@@ -49,7 +49,7 @@ func (s *Server) sendRequestAndWait(ctx context.Context, req wire.Request) (json
 	select {
 	case msg := <-ch:
 		if msg.Error != nil {
-			return nil, &wire.WireError{Kind: wire.ErrRequestFailed, Message: msg.Error.Message, Code: msg.Error.Code}
+			return nil, &codedError{code: msg.Error.Code, msg: msg.Error.Message}
 		}
 		return msg.Result, nil
 	case <-ctx.Done():
@@ -67,12 +67,12 @@ func (s *Server) writeMessage(ctx context.Context, msg any) error {
 	return s.transport.WriteLine(ctx, string(b))
 }
 
-func (s *Server) emitEvent(ctx context.Context, event wire.Event) error {
-	payload, err := wire.MarshalEvent(event)
+func (s *Server) emitEvent(ctx context.Context, event protocol.Event) error {
+	payload, err := protocol.MarshalEvent(event)
 	if err != nil {
 		return err
 	}
-	envelope := wire.JSONRPCRequest[json.RawMessage]{
+	envelope := protocol.JSONRPCRequest[json.RawMessage]{
 		JSONRPC: "2.0",
 		Method:  "event",
 		Params:  payload,
@@ -80,55 +80,54 @@ func (s *Server) emitEvent(ctx context.Context, event wire.Event) error {
 	return s.writeMessage(ctx, envelope)
 }
 
-func (t *turn) RequestApproval(ctx context.Context, req wire.ApprovalRequest) (wire.ApprovalResponse, error) {
+func (t *turn) RequestApproval(ctx context.Context, req protocol.ApprovalRequest) (protocol.ApprovalResponse, error) {
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
-		return wire.ApprovalResponse{}, err
+		return protocol.ApprovalResponse{}, err
 	}
-	var resp wire.ApprovalResponse
+	var resp protocol.ApprovalResponse
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return wire.ApprovalResponse{}, err
+		return protocol.ApprovalResponse{}, err
 	}
 	return resp, nil
 }
 
-func (t *turn) CallExternalTool(ctx context.Context, req wire.ToolCallRequest) (wire.ToolCallResponse, error) {
+func (t *turn) CallExternalTool(ctx context.Context, req protocol.ToolCallRequest) (protocol.ToolCallResponse, error) {
 	ctx = t.s.applyDefaultTimeout(ctx)
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
-		return wire.ToolCallResponse{}, err
+		return protocol.ToolCallResponse{}, err
 	}
-	var resp wire.ToolCallResponse
+	var resp protocol.ToolCallResponse
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return wire.ToolCallResponse{}, err
+		return protocol.ToolCallResponse{}, err
 	}
 	return resp, nil
 }
 
-func (t *turn) AskQuestion(ctx context.Context, req wire.QuestionRequest) (wire.QuestionResponse, error) {
+func (t *turn) AskQuestion(ctx context.Context, req protocol.QuestionRequest) (protocol.QuestionResponse, error) {
 	t.s.mu.Lock()
 	supports := t.s.clientCaps.SupportsQuestion != nil && *t.s.clientCaps.SupportsQuestion
 	t.s.mu.Unlock()
 	if !supports {
-		return wire.QuestionResponse{}, &wire.WireError{
-			Kind:    wire.ErrRequestFailed,
-			Message: "Client does not support structured questions",
-			Code:    codeQuestionNotSupported,
+		return protocol.QuestionResponse{}, &codedError{
+			code: codeQuestionNotSupported,
+			msg:  "Client does not support structured questions",
 		}
 	}
 	ctx = t.s.applyDefaultTimeout(ctx)
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
-		return wire.QuestionResponse{}, err
+		return protocol.QuestionResponse{}, err
 	}
-	var resp wire.QuestionResponse
+	var resp protocol.QuestionResponse
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return wire.QuestionResponse{}, err
+		return protocol.QuestionResponse{}, err
 	}
 	return resp, nil
 }
 
-func (t *turn) TriggerHook(ctx context.Context, req wire.HookRequest) (wire.HookResponse, error) {
+func (t *turn) TriggerHook(ctx context.Context, req protocol.HookRequest) (protocol.HookResponse, error) {
 	t.s.mu.Lock()
 	var sub *hookSubscription
 	for _, candidate := range t.s.hooks {
@@ -144,18 +143,18 @@ func (t *turn) TriggerHook(ctx context.Context, req wire.HookRequest) (wire.Hook
 	t.s.mu.Unlock()
 
 	if sub == nil {
-		return wire.HookResponse{RequestID: req.ID, Action: wire.HookActionAllow}, nil
+		return protocol.HookResponse{RequestID: req.ID, Action: protocol.HookActionAllow}, nil
 	}
 
 	req.SubscriptionID = sub.id
 	ctx = t.s.applyHookTimeout(ctx, sub.timeout)
 	result, err := t.s.sendRequestAndWait(ctx, req)
 	if err != nil {
-		return wire.HookResponse{}, err
+		return protocol.HookResponse{}, err
 	}
-	var resp wire.HookResponse
+	var resp protocol.HookResponse
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return wire.HookResponse{}, err
+		return protocol.HookResponse{}, err
 	}
 	return resp, nil
 }

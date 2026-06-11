@@ -3,9 +3,23 @@ package server
 import (
 	"encoding/json"
 
-	"github.com/ekhodzitsky/kimi-wire"
 	"github.com/ekhodzitsky/kimi-wire/internal/redact"
+	"github.com/ekhodzitsky/kimi-wire/protocol"
 )
+
+// CodedError is an error that carries a JSON-RPC error code.
+type CodedError interface {
+	error
+	Code() int
+}
+
+type codedError struct {
+	code int
+	msg  string
+}
+
+func (e *codedError) Error() string { return e.msg }
+func (e *codedError) Code() int     { return e.code }
 
 const (
 	codeTurnInProgress       = -32000
@@ -24,10 +38,10 @@ func (s *Server) sendError(id string, code int, msg string) error {
 
 func marshalJSONRPCError(id string, code int, msg string) string {
 	safe := redact.RedactString(msg)
-	b, _ := json.Marshal(wire.JSONRPCErrorResponse{
+	b, _ := json.Marshal(protocol.JSONRPCErrorResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error:   &wire.JSONRPCError{Code: code, Message: safe},
+		Error:   &protocol.JSONRPCError{Code: code, Message: safe},
 	})
 	return string(b)
 }

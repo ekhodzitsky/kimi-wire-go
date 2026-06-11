@@ -10,17 +10,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ekhodzitsky/kimi-wire"
 	"github.com/ekhodzitsky/kimi-wire/internal/redact"
+	"github.com/ekhodzitsky/kimi-wire/protocol"
+	"github.com/ekhodzitsky/kimi-wire/transport"
 )
 
 // Server is a Wire protocol server.
 type Server struct {
-	transport      wire.Transport
+	transport      transport.Transport
 	agent          Agent
-	info           wire.ServerInfo
-	slashCmds      []wire.SlashCommandInfo
-	toolValidator  func(wire.ExternalTool) error
+	info           protocol.ServerInfo
+	slashCmds      []protocol.SlashCommandInfo
+	toolValidator  func(protocol.ExternalTool) error
 	supportedHooks []string
 	defaultTimeout time.Duration
 	logf           func(string, ...any)
@@ -28,20 +29,20 @@ type Server struct {
 	mu            sync.Mutex
 	handshakeDone bool
 	negotiated    string
-	clientCaps    wire.ClientCapabilities
-	serverCaps    wire.ServerCapabilities
-	externalTools []wire.ExternalTool
+	clientCaps    protocol.ClientCapabilities
+	serverCaps    protocol.ServerCapabilities
+	externalTools []protocol.ExternalTool
 	hooks         map[string]*hookSubscription
 	activeTurn    *turn
 
 	requestCounter uint64
-	pending        map[string]chan *wire.RawWireMessage
+	pending        map[string]chan *protocol.RawWireMessage
 
 	serveCtx    context.Context
 	cancelServe context.CancelFunc
 	readDone    chan struct{}
 	serveDone   chan struct{}
-	dispatchCh  chan *wire.RawWireMessage
+	dispatchCh  chan *protocol.RawWireMessage
 }
 
 type hookSubscription struct {
@@ -53,26 +54,26 @@ type hookSubscription struct {
 
 // Agent produces prompt results during a turn.
 type Agent interface {
-	Prompt(ctx context.Context, input wire.UserInput, turn Turn) (wire.PromptResult, error)
+	Prompt(ctx context.Context, input protocol.UserInput, turn Turn) (protocol.PromptResult, error)
 }
 
 // Steerer is an optional agent capability that receives steering input.
 type Steerer interface {
-	Steer(ctx context.Context, input wire.UserInput) error
+	Steer(ctx context.Context, input protocol.UserInput) error
 }
 
 // Replayer is an optional agent capability that replays session events.
 type Replayer interface {
-	Replay(ctx context.Context, emitter Emitter) (wire.ReplayResult, error)
+	Replay(ctx context.Context, emitter Emitter) (protocol.ReplayResult, error)
 }
 
 // PlanModeSwitcher is an optional agent capability that toggles plan mode.
 type PlanModeSwitcher interface {
-	SetPlanMode(ctx context.Context, enabled bool, emitter Emitter) (wire.SetPlanModeResult, error)
+	SetPlanMode(ctx context.Context, enabled bool, emitter Emitter) (protocol.SetPlanModeResult, error)
 }
 
 // New creates a Server backed by the given transport and agent.
-func New(transport wire.Transport, agent Agent, opts ...Option) *Server {
+func New(transport transport.Transport, agent Agent, opts ...Option) *Server {
 	if transport == nil {
 		panic("server: nil transport")
 	}
@@ -82,16 +83,16 @@ func New(transport wire.Transport, agent Agent, opts ...Option) *Server {
 	s := &Server{
 		transport:      transport,
 		agent:          agent,
-		info:           wire.ServerInfo{Name: "kimi-wire-server", Version: "0.3.0"},
-		slashCmds:      []wire.SlashCommandInfo{},
-		toolValidator:  func(wire.ExternalTool) error { return nil },
+		info:           protocol.ServerInfo{Name: "kimi-wire-server", Version: "0.3.0"},
+		slashCmds:      []protocol.SlashCommandInfo{},
+		toolValidator:  func(protocol.ExternalTool) error { return nil },
 		supportedHooks: []string{},
 		defaultTimeout: 0,
 		logf:           func(string, ...any) {},
-		pending:        make(map[string]chan *wire.RawWireMessage),
+		pending:        make(map[string]chan *protocol.RawWireMessage),
 		hooks:          make(map[string]*hookSubscription),
-		negotiated:     wire.WireProtocolLegacyVersion,
-		dispatchCh:     make(chan *wire.RawWireMessage, 1024),
+		negotiated:     protocol.WireProtocolLegacyVersion,
+		dispatchCh:     make(chan *protocol.RawWireMessage, 1024),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -134,7 +135,7 @@ func (s *Server) readLoop() {
 			}
 			return
 		}
-		raw := new(wire.RawWireMessage)
+		raw := new(protocol.RawWireMessage)
 		if err := json.Unmarshal([]byte(line), raw); err != nil {
 			s.logf("parse error: %v", redact.RedactString(err.Error()))
 			continue
@@ -166,7 +167,7 @@ func (s *Server) serveLoop() {
 	}
 }
 
-func (s *Server) dispatch(raw *wire.RawWireMessage) {
+func (s *Server) dispatch(raw *protocol.RawWireMessage) {
 	switch raw.Method {
 	case "initialize":
 		s.handleInitialize(raw.ID, raw.Params)
@@ -185,7 +186,7 @@ func (s *Server) dispatch(raw *wire.RawWireMessage) {
 	}
 }
 
-func (s *Server) routeResponse(raw *wire.RawWireMessage) {
+func (s *Server) routeResponse(raw *protocol.RawWireMessage) {
 	s.mu.Lock()
 	ch, ok := s.pending[raw.ID]
 	if ok {
@@ -202,7 +203,7 @@ func (s *Server) routeResponse(raw *wire.RawWireMessage) {
 
 func (s *Server) closePending(err error) {
 	s.mu.Lock()
-	pendingCopy := make(map[string]chan *wire.RawWireMessage, len(s.pending))
+	pendingCopy := make(map[string]chan *protocol.RawWireMessage, len(s.pending))
 	for id, ch := range s.pending {
 		pendingCopy[id] = ch
 		delete(s.pending, id)
@@ -212,14 +213,14 @@ func (s *Server) closePending(err error) {
 	safeMsg := redact.RedactString(err.Error())
 	for _, ch := range pendingCopy {
 		select {
-		case ch <- &wire.RawWireMessage{Error: &wire.JSONRPCError{Code: -1, Message: safeMsg}}:
+		case ch <- &protocol.RawWireMessage{Error: &protocol.JSONRPCError{Code: -1, Message: safeMsg}}:
 		default:
 		}
 	}
 }
 
 func (s *Server) handleInitialize(id string, params json.RawMessage) {
-	var p wire.InitializeParams
+	var p protocol.InitializeParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		_ = s.sendError(id, codeInvalidParams, err.Error())
 		return
@@ -228,18 +229,18 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 	negotiated := s.negotiateVersion(p.ProtocolVersion)
 
 	var accepted []string
-	var rejected []wire.RejectedExternalTool
+	var rejected []protocol.RejectedExternalTool
 	for _, tool := range p.ExternalTools {
 		if err := s.toolValidator(tool); err != nil {
-			rejected = append(rejected, wire.RejectedExternalTool{Name: tool.Name, Reason: redact.RedactString(err.Error())})
+			rejected = append(rejected, protocol.RejectedExternalTool{Name: tool.Name, Reason: redact.RedactString(err.Error())})
 		} else {
 			accepted = append(accepted, tool.Name)
 		}
 	}
-	extResult := &wire.ExternalToolsResult{Accepted: accepted, Rejected: rejected}
+	extResult := &protocol.ExternalToolsResult{Accepted: accepted, Rejected: rejected}
 
-	clientCaps := wire.ClientCapabilities{}
-	serverCaps := wire.ServerCapabilities{}
+	clientCaps := protocol.ClientCapabilities{}
+	serverCaps := protocol.ServerCapabilities{}
 	if p.Capabilities != nil {
 		clientCaps = *p.Capabilities
 		if p.Capabilities.SupportsQuestion != nil && *p.Capabilities.SupportsQuestion {
@@ -281,7 +282,7 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 	s.hooks = hooks
 	s.mu.Unlock()
 
-	result := wire.InitializeResult{
+	result := protocol.InitializeResult{
 		ProtocolVersion: negotiated,
 		Server:          s.info,
 		SlashCommands:   s.slashCmds,
@@ -289,7 +290,7 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 		Capabilities:    &serverCaps,
 	}
 	if len(s.supportedHooks) > 0 || len(hooksConfigured) > 0 {
-		result.Hooks = &wire.HooksInfo{
+		result.Hooks = &protocol.HooksInfo{
 			SupportedEvents: s.supportedHooks,
 			Configured:      hooksConfigured,
 		}
@@ -300,13 +301,13 @@ func (s *Server) handleInitialize(id string, params json.RawMessage) {
 
 func (s *Server) negotiateVersion(requested string) string {
 	if requested == "" {
-		return wire.WireProtocolLegacyVersion
+		return protocol.WireProtocolLegacyVersion
 	}
 	if requested < "1.1" {
-		return wire.WireProtocolLegacyVersion
+		return protocol.WireProtocolLegacyVersion
 	}
-	if requested > wire.WireProtocolVersion {
-		return wire.WireProtocolVersion
+	if requested > protocol.WireProtocolVersion {
+		return protocol.WireProtocolVersion
 	}
 	return requested
 }
@@ -324,7 +325,7 @@ func (s *Server) isHookSupported(event string) bool {
 }
 
 func (s *Server) handlePrompt(id string, params json.RawMessage) {
-	var p wire.PromptParams
+	var p protocol.PromptParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		_ = s.sendError(id, codeInvalidParams, err.Error())
 		return
@@ -340,8 +341,8 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 	s.activeTurn = t
 	s.mu.Unlock()
 
-	if err := s.emitEvent(s.serveCtx, wire.TurnBeginEvent{UserInput: p.UserInput}); err != nil {
-		s.endTurn(id, t, wire.PromptResult{}, err)
+	if err := s.emitEvent(s.serveCtx, protocol.TurnBeginEvent{UserInput: p.UserInput}); err != nil {
+		s.endTurn(id, t, protocol.PromptResult{}, err)
 		return
 	}
 
@@ -349,7 +350,7 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 		defer func() {
 			if r := recover(); r != nil {
 				s.logf("panic in Agent.Prompt: %v", redact.RedactString(fmt.Sprintf("%v", r)))
-				s.endTurn(id, t, wire.PromptResult{}, fmt.Errorf("internal error: %v", r))
+				s.endTurn(id, t, protocol.PromptResult{}, fmt.Errorf("internal error: %v", r))
 			}
 		}()
 		result, err := s.agent.Prompt(t.ctx, p.UserInput, t)
@@ -357,17 +358,17 @@ func (s *Server) handlePrompt(id string, params json.RawMessage) {
 	}()
 }
 
-func (s *Server) endTurn(id string, t *turn, result wire.PromptResult, err error) {
-	_ = s.emitEvent(s.serveCtx, wire.TurnEndEvent{})
+func (s *Server) endTurn(id string, t *turn, result protocol.PromptResult, err error) {
+	_ = s.emitEvent(s.serveCtx, protocol.TurnEndEvent{})
 	s.clearTurn(t)
 	t.close(result, err)
 	if err != nil {
 		code := codeInternalError
 		msg := err.Error()
-		var werr *wire.WireError
-		if errors.As(err, &werr) && werr.Code != 0 {
-			code = werr.Code
-			msg = werr.Message
+		var ce CodedError
+		if errors.As(err, &ce) && ce.Code() != 0 {
+			code = ce.Code()
+			msg = err.Error()
 		}
 		_ = s.sendError(id, code, msg)
 		return
@@ -402,7 +403,7 @@ func (s *Server) handleSteer(id string, params json.RawMessage) {
 		_ = s.sendError(id, codeMethodNotFound, "method not found")
 		return
 	}
-	var p wire.SteerParams
+	var p protocol.SteerParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		_ = s.sendError(id, codeInvalidParams, err.Error())
 		return
@@ -424,7 +425,7 @@ func (s *Server) handleSteer(id string, params json.RawMessage) {
 		_ = s.sendError(id, codeInternalError, err.Error())
 		return
 	}
-	_ = s.sendResponse(id, wire.SteerResult{Status: wire.SteerStatusSteered})
+	_ = s.sendResponse(id, protocol.SteerResult{Status: protocol.SteerStatusSteered})
 }
 
 func (s *Server) handleCancel(id string, params json.RawMessage) {
@@ -437,7 +438,7 @@ func (s *Server) handleCancel(id string, params json.RawMessage) {
 	}
 	t.cancel()
 	<-t.done
-	_ = s.sendResponse(id, wire.CancelResult{})
+	_ = s.sendResponse(id, protocol.CancelResult{})
 }
 
 func (s *Server) handleReplay(id string, params json.RawMessage) {
@@ -467,7 +468,7 @@ func (s *Server) handleSetPlanMode(id string, params json.RawMessage) {
 		_ = s.sendError(id, codeMethodNotFound, "method not found")
 		return
 	}
-	var p wire.SetPlanModeParams
+	var p protocol.SetPlanModeParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		_ = s.sendError(id, codeInvalidParams, err.Error())
 		return
@@ -481,7 +482,7 @@ func (s *Server) handleSetPlanMode(id string, params json.RawMessage) {
 }
 
 func (s *Server) sendResponse(id string, result any) error {
-	return s.writeMessage(s.serveCtx, wire.JSONRPCSuccessResponse[any]{
+	return s.writeMessage(s.serveCtx, protocol.JSONRPCSuccessResponse[any]{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,
@@ -490,6 +491,6 @@ func (s *Server) sendResponse(id string, result any) error {
 
 // Emit emits an event to the client. It satisfies the Emitter interface for
 // optional capabilities such as Replayer and PlanModeSwitcher.
-func (s *Server) Emit(ctx context.Context, event wire.Event) error {
+func (s *Server) Emit(ctx context.Context, event protocol.Event) error {
 	return s.emitEvent(ctx, event)
 }

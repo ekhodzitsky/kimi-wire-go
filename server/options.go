@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ekhodzitsky/kimi-wire"
+	"github.com/ekhodzitsky/kimi-wire/protocol"
 )
 
 // Option configures a Server.
@@ -13,16 +13,16 @@ type Option func(*Server)
 
 // WithServerInfo sets the server name and version returned by initialize.
 func WithServerInfo(name, version string) Option {
-	return func(s *Server) { s.info = wire.ServerInfo{Name: name, Version: version} }
+	return func(s *Server) { s.info = protocol.ServerInfo{Name: name, Version: version} }
 }
 
 // WithSlashCommands sets the slash command list returned by initialize.
-func WithSlashCommands(cmds []wire.SlashCommandInfo) Option {
+func WithSlashCommands(cmds []protocol.SlashCommandInfo) Option {
 	return func(s *Server) { s.slashCmds = cmds }
 }
 
 // WithExternalToolValidator decides whether an external tool is accepted.
-func WithExternalToolValidator(fn func(wire.ExternalTool) error) Option {
+func WithExternalToolValidator(fn func(protocol.ExternalTool) error) Option {
 	return func(s *Server) { s.toolValidator = fn }
 }
 

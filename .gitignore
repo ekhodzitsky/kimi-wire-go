@@ -33,6 +33,7 @@ build/
 # Example binaries
 /quickstart
 /examples/*/quickstart
+/examples/*/echo-server
 
 # Superpowers generated docs
 docs/superpowers/
