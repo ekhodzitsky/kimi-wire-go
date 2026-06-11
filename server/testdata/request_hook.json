@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "method": "request", "id": "hook-req-1", "params": {"type": "HookRequest", "payload": {"id": "hook-1", "subscription_id": "sub-1", "event": "PreToolUse", "target": "read_file", "input_data": {"tool": "read_file"}}}}

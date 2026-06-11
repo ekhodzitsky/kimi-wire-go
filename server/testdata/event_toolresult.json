@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "ToolResult", "payload": {"tool_call_id": "tc-1", "return_value": {"is_error": false, "output": "file contents", "message": "Read README.md", "display": []}}}}

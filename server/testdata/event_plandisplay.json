@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "PlanDisplay", "payload": {"content": "# Plan\n1. Do thing", "file_path": "/tmp/plan.md"}}}

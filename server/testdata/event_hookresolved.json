@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "HookResolved", "payload": {"event": "PreToolUse", "target": "read_file", "action": "allow", "reason": "", "duration_ms": 42}}}
