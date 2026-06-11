@@ -14,7 +14,9 @@ func TestClientPrompt(t *testing.T) {
 	client := NewClient(mem)
 
 	// InMemoryTransport buffers, so inject before calling Prompt.
-	mem.Inject(`{"jsonrpc":"2.0","id":"req-1","result":{"status":"finished"}}`)
+	if err := mem.Inject(`{"jsonrpc":"2.0","id":"req-1","result":{"status":"finished"}}`); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
 
 	result, err := client.Prompt(ctx, UserInput{Text: "hello"})
 	if err != nil {
@@ -50,8 +52,12 @@ func TestClientReadResponseTimeout(t *testing.T) {
 func TestClientReadResponseOutOfOrder(t *testing.T) {
 	mem := NewInMemoryTransport()
 	c := NewClient(mem)
-	mem.Inject(`{"jsonrpc":"2.0","id":"req-2","result":{"status":"finished"}}`)
-	mem.Inject(`{"jsonrpc":"2.0","id":"req-1","result":{"status":"cancelled"}}`)
+	if err := mem.Inject(`{"jsonrpc":"2.0","id":"req-2","result":{"status":"finished"}}`); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if err := mem.Inject(`{"jsonrpc":"2.0","id":"req-1","result":{"status":"cancelled"}}`); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
 	var got PromptResult
 	if err := c.readResponse(context.Background(), "req-1", &got); err != nil {
 		t.Fatalf("read: %v", err)
@@ -64,7 +70,9 @@ func TestClientReadResponseOutOfOrder(t *testing.T) {
 func TestClientInitializeMethodNotFound(t *testing.T) {
 	mem := NewInMemoryTransport()
 	c := NewClient(mem)
-	mem.Inject(`{"jsonrpc":"2.0","id":"req-1","error":{"code":-32601,"message":"method not found"}}`)
+	if err := mem.Inject(`{"jsonrpc":"2.0","id":"req-1","error":{"code":-32601,"message":"method not found"}}`); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
 	res, err := c.Initialize(context.Background(), InitializeParams{ProtocolVersion: WireProtocolVersion})
 	if err != nil {
 		t.Fatalf("initialize: %v", err)

@@ -18,8 +18,6 @@ import (
 	"time"
 )
 
-const maxWireLineLength = 16 * 1024 * 1024
-
 // SpawnOptions configures a child-process transport spawn.
 type SpawnOptions struct {
 	WorkDir *string

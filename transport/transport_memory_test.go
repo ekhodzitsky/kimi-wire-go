@@ -8,7 +8,9 @@ import (
 func TestInMemoryTransportInjectAndRead(t *testing.T) {
 	ctx := context.Background()
 	mem := NewInMemoryTransport()
-	mem.Inject("hello")
+	if err := mem.Inject("hello"); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
 	line, err := mem.ReadLine(ctx)
 	if err != nil {
 		t.Fatalf("read: %v", err)

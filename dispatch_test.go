@@ -27,7 +27,9 @@ func TestDispatchEvent(t *testing.T) {
 
 	h := &testHandler{}
 	go func() {
-		mem.Inject(`{"jsonrpc":"2.0","method":"event","params":{"type":"TurnEnd","payload":{}}}`)
+		if err := mem.Inject(`{"jsonrpc":"2.0","method":"event","params":{"type":"TurnEnd","payload":{}}}`); err != nil {
+			panic(err)
+		}
 	}()
 
 	err := client.Dispatch(ctx, h)

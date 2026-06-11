@@ -80,6 +80,7 @@ var ParseEvent = protocol.ParseEvent
 
 // JSON-RPC types
 type RawWireMessage = protocol.RawWireMessage
+
 // JSONRPCRequest is a typed JSON-RPC 2.0 request.
 type JSONRPCRequest[T any] struct {
 	JSONRPC string `json:"jsonrpc"`
